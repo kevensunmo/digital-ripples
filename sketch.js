@@ -2,11 +2,9 @@
 // Digital Ripples - Interactive Installation
 // ============================================================================
 
-// Global constants
-const CANVAS_WIDTH = 1920;
-const CANVAS_HEIGHT = 1080;
-const UI_PANEL_HEIGHT = 200; // Height of bottom UI panel
-const POND_HEIGHT = CANVAS_HEIGHT - UI_PANEL_HEIGHT;
+// Layout (responsive: updated in setup and windowResized)
+let uiPanelHeight = 200; // Height of bottom UI panel
+let pondHeight = 880;    // Canvas height minus UI panel (initial placeholder)
 
 // Action types mapped to quadrants
 const ACTIONS = {
@@ -69,10 +67,12 @@ class Ripple {
     }
     
     getActionParams(actionType) {
+        // Scale ripple size on small screens (reference width 800px)
+        const scale = typeof width !== 'undefined' ? min(1, max(0.3, width / 800)) : 1;
         switch(actionType) {
             case ACTIONS.LIKE:
                 return {
-                    maxRadius: 400,
+                    maxRadius: 400 * scale,
                     amplitude: 1.0,
                     damping: 0.95,
                     speed: 3.5,
@@ -81,7 +81,7 @@ class Ripple {
                 };
             case ACTIONS.DISLIKE:
                 return {
-                    maxRadius: 350,
+                    maxRadius: 350 * scale,
                     amplitude: 0.8,
                     damping: 0.92,
                     speed: 2.0,
@@ -90,7 +90,7 @@ class Ripple {
                 };
             case ACTIONS.POSITIVE_COMMENT:
                 return {
-                    maxRadius: 300,
+                    maxRadius: 300 * scale,
                     amplitude: 0.6,
                     damping: 0.98,
                     speed: 4.0,
@@ -99,7 +99,7 @@ class Ripple {
                 };
             case ACTIONS.NEGATIVE_COMMENT:
                 return {
-                    maxRadius: 250,
+                    maxRadius: 250 * scale,
                     amplitude: 0.4,
                     damping: 0.99,
                     speed: 2.5,
@@ -611,8 +611,16 @@ class UIManager {
     }
     
     initButtons() {
-        const startX = (CANVAS_WIDTH - (4 * this.buttonWidth + 3 * this.buttonSpacing)) / 2;
-        const y = POND_HEIGHT + (UI_PANEL_HEIGHT - this.buttonHeight) / 2;
+        // Responsive button dimensions
+        this.buttonSpacing = min(30, max(8, width * 0.02));
+        const totalButtonWidth = 4 * this.buttonWidth + 3 * this.buttonSpacing;
+        if (totalButtonWidth > width - 40) {
+            this.buttonWidth = max(60, (width - 40 - 3 * this.buttonSpacing) / 4);
+        }
+        this.buttonHeight = min(150, max(50, uiPanelHeight * 0.85));
+        
+        const startX = (width - (4 * this.buttonWidth + 3 * this.buttonSpacing)) / 2;
+        const y = pondHeight + (uiPanelHeight - this.buttonHeight) / 2;
         
         this.buttons = [
             {
@@ -698,9 +706,9 @@ class UIManager {
     }
     
     renderQuadrantIndicator() {
-        const indicatorSize = 120;
-        const indicatorX = CANVAS_WIDTH - indicatorSize - 20;
-        const indicatorY = POND_HEIGHT + (UI_PANEL_HEIGHT - indicatorSize) / 2;
+        const indicatorSize = min(120, width * 0.12, uiPanelHeight * 0.7);
+        const indicatorX = width - indicatorSize - 20;
+        const indicatorY = pondHeight + (uiPanelHeight - indicatorSize) / 2;
         
         push();
         translate(indicatorX + indicatorSize / 2, indicatorY + indicatorSize / 2);
@@ -831,28 +839,29 @@ class UIManager {
 // ============================================================================
 
 function getSpawnPoint(actionType) {
-    const centerX = CANVAS_WIDTH / 2;
-    const centerY = POND_HEIGHT / 2;
+    const centerX = width / 2;
+    const centerY = pondHeight / 2;
+    const margin = min(100, width * 0.08, pondHeight * 0.08);
     
     // Bias spawn point toward action's quadrant
     let x, y;
     
     switch(actionType) {
         case ACTIONS.LIKE: // +x (right)
-            x = random(centerX, CANVAS_WIDTH - 100);
-            y = random(100, POND_HEIGHT - 100);
+            x = random(centerX, width - margin);
+            y = random(margin, pondHeight - margin);
             break;
         case ACTIONS.DISLIKE: // -x (left)
-            x = random(100, centerX);
-            y = random(100, POND_HEIGHT - 100);
+            x = random(margin, centerX);
+            y = random(margin, pondHeight - margin);
             break;
         case ACTIONS.POSITIVE_COMMENT: // +y (up)
-            x = random(100, CANVAS_WIDTH - 100);
-            y = random(100, centerY);
+            x = random(margin, width - margin);
+            y = random(margin, centerY);
             break;
         case ACTIONS.NEGATIVE_COMMENT: // -y (down)
-            x = random(100, CANVAS_WIDTH - 100);
-            y = random(centerY, POND_HEIGHT - 100);
+            x = random(margin, width - margin);
+            y = random(centerY, pondHeight - margin);
             break;
     }
     
@@ -867,9 +876,9 @@ function renderDebugOverlay() {
 }
 
 function renderActivityMeterDebug() {
-    const meterWidth = 300;
+    const meterWidth = min(300, width - 60);
     const meterHeight = 20;
-    const meterX = CANVAS_WIDTH - meterWidth - 30;
+    const meterX = width - meterWidth - 30;
     const meterY = 30;
     
     // Background
@@ -904,19 +913,19 @@ function renderActivityMeterDebug() {
 
 function renderBackground() {
     // Dark pond base with gradient
-    for (let y = 0; y < POND_HEIGHT; y += 3) {
-        const gradient = map(y, 0, POND_HEIGHT, 10, 25);
+    for (let y = 0; y < pondHeight; y += 3) {
+        const gradient = map(y, 0, pondHeight, 10, 25);
         stroke(gradient, gradient + 5, gradient + 10);
         strokeWeight(3);
-        line(0, y, CANVAS_WIDTH, y);
+        line(0, y, width, y);
     }
     
     // Animated grain/noise (optimized - sample fewer points)
     const turbulence = activityManager.getBackgroundTurbulence();
     push();
     noStroke();
-    for (let x = 0; x < CANVAS_WIDTH; x += 4) {
-        for (let y = 0; y < POND_HEIGHT; y += 4) {
+    for (let x = 0; x < width; x += 4) {
+        for (let y = 0; y < pondHeight; y += 4) {
             const noiseVal = noise(x * 0.01, y * 0.01, frameCount * 0.01) * turbulence * 8;
             fill(noiseVal, noiseVal * 1.1, noiseVal * 1.2, 30);
             rect(x, y, 4, 4);
@@ -933,8 +942,8 @@ function renderBackground() {
             const alpha = vignette * (1 - r / 8) * 25;
             stroke(0, 0, 0, alpha);
             strokeWeight(3);
-            ellipse(CANVAS_WIDTH / 2, POND_HEIGHT / 2, 
-                   CANVAS_WIDTH * 1.5 - r * 60, POND_HEIGHT * 1.5 - r * 60);
+            ellipse(width / 2, pondHeight / 2, 
+                   width * 1.5 - r * 60, pondHeight * 1.5 - r * 60);
         }
         pop();
     }
@@ -944,7 +953,7 @@ function renderBackground() {
     if (flicker > 0) {
         fill(255, 255, 255, flicker * 255);
         noStroke();
-        rect(0, 0, CANVAS_WIDTH, POND_HEIGHT);
+        rect(0, 0, width, pondHeight);
     }
 }
 
@@ -953,7 +962,8 @@ function renderBackground() {
 // ============================================================================
 
 function setup() {
-    createCanvas(CANVAS_WIDTH, CANVAS_HEIGHT);
+    createCanvas(windowWidth, windowHeight);
+    updateLayout();
     
     // Initialize managers
     activityManager = new ActivityManager();
@@ -962,6 +972,21 @@ function setup() {
     
     // Initialize background noise array for grain effect
     backgroundNoise = [];
+}
+
+// Update layout variables from current canvas size; call after resize
+function updateLayout() {
+    uiPanelHeight = min(200, Math.floor(height * 0.2));
+    pondHeight = height - uiPanelHeight;
+    if (typeof uiManager !== 'undefined' && uiManager.initButtons) {
+        uiManager.initButtons();
+    }
+}
+
+// Respond to window resize
+function windowResized() {
+    resizeCanvas(windowWidth, windowHeight);
+    updateLayout();
 }
 
 function draw() {
@@ -1023,7 +1048,7 @@ function draw() {
     if (blackoutAlpha > 0) {
         fill(0, 0, 0, blackoutAlpha);
         noStroke();
-        rect(0, 0, CANVAS_WIDTH, POND_HEIGHT);
+        rect(0, 0, width, pondHeight);
     }
 }
 
