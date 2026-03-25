@@ -1,0 +1,4 @@
+# macOS / external volume junk (never commit)
+._*
+.DS_Store
+.Rhistory
