@@ -38,6 +38,159 @@ let quadrantPosition = {
 };
 const QUADRANT_SMOOTHING = 0.15; // How much each press moves the average (0-1)
 
+// Videos = Cartesian quadrant pairs: Happy/Sad × Noise/Silence (files: Happy_Noise.mp4, …)
+const QUADRANT_VIDEO_IDS = ['Happy_Noise', 'Happy_Silence', 'Sad_Noise', 'Sad_Silence'];
+const DEFAULT_QUADRANT_VIDEO_ID = 'Happy_Noise';
+
+// Low-res grain buffer (updated every few frames) — keeps sketch fast so video stays smooth
+let pondGrainBuffer = null;
+let pondGrainW = 0;
+let pondGrainH = 0;
+let pondGrainLastFrame = -1;
+const POND_GRAIN_FRAME_SKIP = 2; // refresh grain every N draw frames
+
+// ============================================================================
+// VIDEO BACKGROUND (quadrant pair + crossfade)
+// ============================================================================
+
+class VideoBackgroundManager {
+    constructor() {
+        this.clips = {};
+        this.foregroundId = DEFAULT_QUADRANT_VIDEO_ID;
+        this.backgroundId = null; // outgoing clip during crossfade
+        this.fadeStartMs = 0;
+        this.fadeDurationMs = 1400;
+        this.lastStableId = DEFAULT_QUADRANT_VIDEO_ID;
+        this.deadZone = 0.1;
+        this.playbackStarted = false;
+    }
+
+    preloadAssets() {
+        for (const id of QUADRANT_VIDEO_IDS) {
+            const v = createVideo(`assets/videos/${id}.mp4`);
+            v.hide();
+            v.volume(0);
+            v.attribute('playsinline', '');
+            v.attribute('muted', '');
+            // Hint playback at device rate (helps some browsers stay in sync with compositor)
+            try {
+                v.elt.playbackRate = 1;
+            } catch (e) { /* ignore */ }
+            this.clips[id] = v;
+        }
+    }
+
+    /** Call after first user gesture so browsers allow playback */
+    ensurePlaybackStarted() {
+        if (this.playbackStarted) return;
+        this.playbackStarted = true;
+        for (const id of Object.keys(this.clips)) {
+            const v = this.clips[id];
+            v.loop();
+            if (id === this.foregroundId) {
+                v.play();
+            } else {
+                v.pause();
+            }
+        }
+    }
+
+    /** Map (happySad, noiseSilence) to one of four clips: Happy_Noise, Happy_Silence, … */
+    pickTargetVideoId(hs, ns) {
+        if (abs(hs) < this.deadZone && abs(ns) < this.deadZone) {
+            return this.lastStableId;
+        }
+        const row = hs >= 0 ? 'Happy' : 'Sad';
+        const col = ns >= 0 ? 'Noise' : 'Silence';
+        const id = `${row}_${col}`;
+        this.lastStableId = id;
+        return id;
+    }
+
+    snapCrossfadeComplete() {
+        if (this.backgroundId !== null) {
+            const out = this.clips[this.backgroundId];
+            if (out) out.pause();
+            this.backgroundId = null;
+        }
+    }
+
+    beginCrossfade(newId) {
+        if (newId === this.foregroundId) return;
+        const incoming = this.clips[newId];
+        if (!incoming) return;
+        this.backgroundId = this.foregroundId;
+        this.foregroundId = newId;
+        this.fadeStartMs = millis();
+        try {
+            incoming.time(0);
+        } catch (e) { /* some browsers */ }
+        incoming.loop();
+        incoming.play();
+        const out = this.clips[this.backgroundId];
+        if (out) out.play();
+    }
+
+    updateFromQuadrant(hs, ns) {
+        const target = this.pickTargetVideoId(hs, ns);
+        if (target !== this.foregroundId) {
+            if (this.backgroundId !== null) {
+                this.snapCrossfadeComplete();
+            }
+            this.beginCrossfade(target);
+        }
+    }
+
+    getFadeT() {
+        if (this.backgroundId === null) return 1;
+        return constrain((millis() - this.fadeStartMs) / this.fadeDurationMs, 0, 1);
+    }
+
+    endCrossfadeIfDone() {
+        if (this.backgroundId === null) return;
+        if (this.getFadeT() < 1) return;
+        const out = this.clips[this.backgroundId];
+        if (out) out.pause();
+        this.backgroundId = null;
+    }
+
+    /** object-fit: cover in pond area */
+    drawVideoCover(vid, alpha) {
+        if (!vid || vid.width <= 0) return;
+        const w = width;
+        const h = pondHeight;
+        const vw = vid.width;
+        const vh = vid.height;
+        const scale = max(w / vw, h / vh);
+        const dw = vw * scale;
+        const dh = vh * scale;
+        const ox = (w - dw) / 2;
+        const oy = (h - dh) / 2;
+        push();
+        tint(255, alpha);
+        image(vid, ox, oy, dw, dh);
+        pop();
+    }
+
+    render() {
+        const t = this.getFadeT();
+        const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+
+        if (this.backgroundId !== null) {
+            const outAlpha = 255 * (1 - e);
+            const inAlpha = 255 * e;
+            this.drawVideoCover(this.clips[this.backgroundId], outAlpha);
+            this.drawVideoCover(this.clips[this.foregroundId], inAlpha);
+        } else {
+            this.drawVideoCover(this.clips[this.foregroundId], 255);
+        }
+
+        this.endCrossfadeIfDone();
+    }
+}
+
+let videoBackgroundManager;
+
 // ============================================================================
 // RIPPLE CLASS
 // ============================================================================
@@ -911,28 +1064,59 @@ function renderActivityMeterDebug() {
 // BACKGROUND RENDERING
 // ============================================================================
 
-function renderBackground() {
-    // Dark pond base with gradient
-    for (let y = 0; y < pondHeight; y += 3) {
-        const gradient = map(y, 0, pondHeight, 10, 25);
-        stroke(gradient, gradient + 5, gradient + 10);
-        strokeWeight(3);
-        line(0, y, width, y);
+/** Resize / refresh low-resolution grain texture (cheap vs tens of thousands of rects per frame) */
+function updatePondGrainBuffer(turbulence) {
+    const gw = max(32, ceil(width / 5));
+    const gh = max(24, ceil(pondHeight / 5));
+    if (!pondGrainBuffer || pondGrainW !== gw || pondGrainH !== gh) {
+        pondGrainBuffer = createGraphics(gw, gh);
+        pondGrainBuffer.pixelDensity(1);
+        pondGrainW = gw;
+        pondGrainH = gh;
+        pondGrainLastFrame = -1;
     }
-    
-    // Animated grain/noise (optimized - sample fewer points)
-    const turbulence = activityManager.getBackgroundTurbulence();
-    push();
-    noStroke();
-    for (let x = 0; x < width; x += 4) {
-        for (let y = 0; y < pondHeight; y += 4) {
-            const noiseVal = noise(x * 0.01, y * 0.01, frameCount * 0.01) * turbulence * 8;
-            fill(noiseVal, noiseVal * 1.1, noiseVal * 1.2, 30);
-            rect(x, y, 4, 4);
+    if (pondGrainLastFrame >= 0 && frameCount - pondGrainLastFrame < POND_GRAIN_FRAME_SKIP) {
+        return;
+    }
+    pondGrainLastFrame = frameCount;
+    pondGrainBuffer.loadPixels();
+    const px = pondGrainBuffer.pixels;
+    let p = 0;
+    for (let j = 0; j < gh; j++) {
+        for (let i = 0; i < gw; i++) {
+            const noiseVal = noise(i * 0.09, j * 0.09, frameCount * 0.012) * turbulence * 14;
+            const n = constrain(noiseVal, 0, 255);
+            px[p++] = n;
+            px[p++] = constrain(n * 1.05, 0, 255);
+            px[p++] = constrain(n * 1.1, 0, 255);
+            px[p++] = 38;
         }
     }
+    pondGrainBuffer.updatePixels();
+}
+
+function renderBackground() {
+    // Single semi-transparent veil (avoids thousands of strip draws)
+    push();
+    noStroke();
+    fill(5, 10, 18, 118);
+    rect(0, 0, width, pondHeight);
+    fill(5, 8, 14, 72);
+    rect(0, 0, width, pondHeight * 0.45);
     pop();
-    
+
+    // Scaled grain image from small offscreen buffer
+    const turbulence = activityManager.getBackgroundTurbulence();
+    updatePondGrainBuffer(turbulence);
+    if (pondGrainBuffer) {
+        push();
+        imageMode(CORNER);
+        tint(255, 200);
+        image(pondGrainBuffer, 0, 0, width, pondHeight);
+        noTint();
+        pop();
+    }
+
     // Vignette effect
     const vignette = activityManager.getVignetteIntensity();
     if (vignette > 0) {
@@ -961,8 +1145,15 @@ function renderBackground() {
 // P5.JS SETUP AND DRAW
 // ============================================================================
 
+function preload() {
+    videoBackgroundManager = new VideoBackgroundManager();
+    videoBackgroundManager.preloadAssets();
+}
+
 function setup() {
     createCanvas(windowWidth, windowHeight);
+    pixelDensity(1); // lighter GPU load on Retina — smoother video → canvas compositing
+    frameRate(60);
     updateLayout();
     
     // Initialize managers
@@ -978,6 +1169,9 @@ function setup() {
 function updateLayout() {
     uiPanelHeight = min(200, Math.floor(height * 0.2));
     pondHeight = height - uiPanelHeight;
+    // Force pond grain buffer rebuild on next draw
+    pondGrainW = 0;
+    pondGrainH = 0;
     if (typeof uiManager !== 'undefined' && uiManager.initButtons) {
         uiManager.initButtons();
     }
@@ -987,6 +1181,7 @@ function updateLayout() {
 function windowResized() {
     resizeCanvas(windowWidth, windowHeight);
     updateLayout();
+    // video draw uses current width / pondHeight each frame — no extra resize needed
 }
 
 function draw() {
@@ -1005,8 +1200,19 @@ function draw() {
         soundManager.unmute();
     }
     
-    // Clear and render background
-    background(15, 20, 25);
+    // Base fill (visible before video frames load)
+    background(12, 14, 20);
+    
+    // Quadrant-driven video layer + smooth crossfade
+    if (videoBackgroundManager) {
+        videoBackgroundManager.updateFromQuadrant(
+            quadrantPosition.happySad,
+            quadrantPosition.noiseSilence
+        );
+        videoBackgroundManager.render();
+    }
+    
+    // Digital pond overlay (grain, vignette) on top of video
     renderBackground();
     
     // Update and render ripples
@@ -1057,6 +1263,10 @@ function draw() {
 // ============================================================================
 
 function mousePressed() {
+    if (videoBackgroundManager) {
+        videoBackgroundManager.ensurePlaybackStarted();
+    }
+    
     // Check UI button clicks
     const action = uiManager.handleClick(mouseX, mouseY);
     
@@ -1081,6 +1291,10 @@ function mousePressed() {
 
 // Keyboard input (for testing and future hardware integration)
 function keyPressed() {
+    if (videoBackgroundManager) {
+        videoBackgroundManager.ensurePlaybackStarted();
+    }
+    
     // Toggle debug overlay
     if (key === 'd' || key === 'D') {
         showDebug = !showDebug;
