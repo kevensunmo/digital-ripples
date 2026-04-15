@@ -1,6 +1,9 @@
 // ============================================================================
 // Digital Ripples - Interactive Installation
 // ============================================================================
+//
+// Modes (URL): default = buttons on this screen. ?mode=display = video wall only;
+// use tablet at http://<PC-ip>:8080/controller.html with npm start (see server.mjs).
 
 // Layout (responsive: updated in setup and windowResized)
 let uiPanelHeight = 200; // Height of bottom UI panel
@@ -30,6 +33,16 @@ let uiManager;
 let showDebug = false;
 let isFullscreen = false;
 let backgroundNoise = [];
+
+/** true when monitor shows only pond/video; controls come from controller.html over WebSocket */
+let IS_DISPLAY_MODE = false;
+function detectAppMode() {
+    if (typeof window === 'undefined') return;
+    IS_DISPLAY_MODE = new URLSearchParams(window.location.search).get('mode') === 'display';
+}
+detectAppMode();
+
+let displayInputSocket = null;
 
 // Quadrant tracking (persistent values)
 let quadrantPosition = {
@@ -764,6 +777,10 @@ class UIManager {
     }
     
     initButtons() {
+        if (IS_DISPLAY_MODE) {
+            this.buttons = [];
+            return;
+        }
         // Responsive button dimensions
         this.buttonSpacing = min(30, max(8, width * 0.02));
         const totalButtonWidth = 4 * this.buttonWidth + 3 * this.buttonSpacing;
@@ -829,6 +846,12 @@ class UIManager {
     }
     
     render() {
+        if (IS_DISPLAY_MODE) {
+            if (showDebug) {
+                this.renderQuadrantIndicator();
+            }
+            return;
+        }
         // Render buttons
         for (let button of this.buttons) {
             this.renderButton(button);
@@ -859,9 +882,14 @@ class UIManager {
     }
     
     renderQuadrantIndicator() {
-        const indicatorSize = min(120, width * 0.12, uiPanelHeight * 0.7);
+        // In display mode uiPanelHeight is 0, so use a fixed overlay size/position.
+        const indicatorSize = IS_DISPLAY_MODE
+            ? min(160, width * 0.18, height * 0.2)
+            : min(120, width * 0.12, uiPanelHeight * 0.7);
         const indicatorX = width - indicatorSize - 20;
-        const indicatorY = pondHeight + (uiPanelHeight - indicatorSize) / 2;
+        const indicatorY = IS_DISPLAY_MODE
+            ? 68
+            : pondHeight + (uiPanelHeight - indicatorSize) / 2;
         
         push();
         translate(indicatorX + indicatorSize / 2, indicatorY + indicatorSize / 2);
@@ -1021,6 +1049,60 @@ function getSpawnPoint(actionType) {
     return { x, y };
 }
 
+function actionFromRemoteKey(key) {
+    switch (key) {
+        case 'LIKE': return ACTIONS.LIKE;
+        case 'DISLIKE': return ACTIONS.DISLIKE;
+        case 'POSITIVE_COMMENT': return ACTIONS.POSITIVE_COMMENT;
+        case 'NEGATIVE_COMMENT': return ACTIONS.NEGATIVE_COMMENT;
+        default: return null;
+    }
+}
+
+/** Shared path for local buttons, keyboard, and tablet WebSocket */
+function fireInputAction(action) {
+    if (!action || !activityManager.shouldSpawnRipples()) return;
+    if (videoBackgroundManager) {
+        videoBackgroundManager.ensurePlaybackStarted();
+    }
+    uiManager.updateQuadrantPosition(action);
+    const spawn = getSpawnPoint(action);
+    ripples.push(new Ripple(spawn.x, spawn.y, action, millis()));
+    activityManager.addActivity(action);
+    soundManager.playActionSound(action);
+}
+
+function connectDisplayInputSocket() {
+    if (!IS_DISPLAY_MODE || typeof WebSocket === 'undefined') return;
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = `${proto}//${location.host}/ws`;
+    const connect = () => {
+        let socket;
+        try {
+            socket = new WebSocket(url);
+        } catch (e) {
+            setTimeout(connect, 2000);
+            return;
+        }
+        socket.onmessage = (ev) => {
+            try {
+                const msg = JSON.parse(ev.data);
+                if (msg.type !== 'input' || !msg.action) return;
+                const action = actionFromRemoteKey(msg.action);
+                if (action) fireInputAction(action);
+            } catch (e) { /* ignore */ }
+        };
+        socket.onclose = () => {
+            displayInputSocket = null;
+            setTimeout(connect, 2000);
+        };
+        socket.onopen = () => {
+            displayInputSocket = socket;
+        };
+    };
+    connect();
+}
+
 function renderDebugOverlay() {
     if (!showDebug) return;
     
@@ -1163,12 +1245,21 @@ function setup() {
     
     // Initialize background noise array for grain effect
     backgroundNoise = [];
+    
+    if (IS_DISPLAY_MODE) {
+        connectDisplayInputSocket();
+    }
 }
 
 // Update layout variables from current canvas size; call after resize
 function updateLayout() {
-    uiPanelHeight = min(200, Math.floor(height * 0.2));
-    pondHeight = height - uiPanelHeight;
+    if (IS_DISPLAY_MODE) {
+        uiPanelHeight = 0;
+        pondHeight = height;
+    } else {
+        uiPanelHeight = min(200, Math.floor(height * 0.2));
+        pondHeight = height - uiPanelHeight;
+    }
     // Force pond grain buffer rebuild on next draw
     pondGrainW = 0;
     pondGrainH = 0;
@@ -1267,25 +1358,21 @@ function mousePressed() {
         videoBackgroundManager.ensurePlaybackStarted();
     }
     
+    if (IS_DISPLAY_MODE) {
+        return;
+    }
+    
     // Check UI button clicks
     const action = uiManager.handleClick(mouseX, mouseY);
     
     if (action && activityManager.shouldSpawnRipples()) {
-        // Update quadrant position
-        uiManager.updateQuadrantPosition(action);
-        
-        // Get spawn point based on action quadrant
-        const spawn = getSpawnPoint(action);
-        
-        // Create ripple
-        const ripple = new Ripple(spawn.x, spawn.y, action, millis());
-        ripples.push(ripple);
-        
-        // Add activity
-        activityManager.addActivity(action);
-        
-        // Play sound
-        soundManager.playActionSound(action);
+        for (const b of uiManager.buttons) {
+            if (b.action === action) {
+                uiManager.triggerButton(b);
+                break;
+            }
+        }
+        fireInputAction(action);
     }
 }
 
@@ -1306,42 +1393,10 @@ function keyPressed() {
     }
     
     // Simulate button presses with keys 1-4
-    if (key === '1' && activityManager.shouldSpawnRipples()) {
-        const action = ACTIONS.LIKE;
-        uiManager.updateQuadrantPosition(action);
-        const spawn = getSpawnPoint(action);
-        const ripple = new Ripple(spawn.x, spawn.y, action, millis());
-        ripples.push(ripple);
-        activityManager.addActivity(action);
-        soundManager.playActionSound(action);
-    }
-    if (key === '2' && activityManager.shouldSpawnRipples()) {
-        const action = ACTIONS.DISLIKE;
-        uiManager.updateQuadrantPosition(action);
-        const spawn = getSpawnPoint(action);
-        const ripple = new Ripple(spawn.x, spawn.y, action, millis());
-        ripples.push(ripple);
-        activityManager.addActivity(action);
-        soundManager.playActionSound(action);
-    }
-    if (key === '3' && activityManager.shouldSpawnRipples()) {
-        const action = ACTIONS.POSITIVE_COMMENT;
-        uiManager.updateQuadrantPosition(action);
-        const spawn = getSpawnPoint(action);
-        const ripple = new Ripple(spawn.x, spawn.y, action, millis());
-        ripples.push(ripple);
-        activityManager.addActivity(action);
-        soundManager.playActionSound(action);
-    }
-    if (key === '4' && activityManager.shouldSpawnRipples()) {
-        const action = ACTIONS.NEGATIVE_COMMENT;
-        uiManager.updateQuadrantPosition(action);
-        const spawn = getSpawnPoint(action);
-        const ripple = new Ripple(spawn.x, spawn.y, action, millis());
-        ripples.push(ripple);
-        activityManager.addActivity(action);
-        soundManager.playActionSound(action);
-    }
+    if (key === '1') fireInputAction(ACTIONS.LIKE);
+    if (key === '2') fireInputAction(ACTIONS.DISLIKE);
+    if (key === '3') fireInputAction(ACTIONS.POSITIVE_COMMENT);
+    if (key === '4') fireInputAction(ACTIONS.NEGATIVE_COMMENT);
 }
 
 function toggleFullscreen() {

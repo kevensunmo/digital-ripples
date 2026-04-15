@@ -2,3 +2,9 @@
 ._*
 .DS_Store
 .Rhistory
+
+# GitHub SSH private key (stored locally for this machine; never commit)
+github-ssh/id_ed25519_digital_ripples
+
+# Node (dual-display relay server)
+node_modules/

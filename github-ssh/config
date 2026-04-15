@@ -1,0 +1,15 @@
+# Local SSH config for GitHub (optional). OpenSSH requires an absolute path in IdentityFile.
+#
+# Easier approach (recommended): run ./apply-git-ssh-command.sh — that sets this repo’s
+# core.sshCommand to git-ssh.sh and needs no global ~/.ssh/config.
+#
+# If you really want `ssh -F …`, copy this file to config.local, put your clone’s path
+# in IdentityFile below, then:
+#   ssh -F config.local -T git@github.com
+
+Host github.com
+  HostName github.com
+  User git
+  IdentitiesOnly yes
+  AddKeysToAgent no
+  IdentityFile PLACEHOLDER_REPLACE_WITH_FULL_PATH_TO/id_ed25519_digital_ripples

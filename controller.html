@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Digital Ripples — Control</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #0a0a12;
+      font-family: system-ui, sans-serif;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    h1 {
+      color: #889;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-align: center;
+      padding: 0.5rem 0.75rem;
+      margin: 0;
+      letter-spacing: 0.05em;
+    }
+    #version {
+      position: absolute;
+      top: 0.45rem;
+      right: 0.65rem;
+      font-size: 0.65rem;
+      color: #667;
+      letter-spacing: 0.04em;
+      user-select: none;
+      -webkit-user-select: none;
+      pointer-events: none;
+    }
+    #status {
+      text-align: center;
+      font-size: 0.75rem;
+      color: #666;
+      padding: 0 0.5rem 0.35rem;
+      min-height: 1.25rem;
+    }
+    #status.connected { color: #6a8; }
+    #status.error { color: #c66; }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 12px;
+      padding: 12px;
+      height: calc(100% - 4.5rem);
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    button {
+      border: 2px solid #445;
+      border-radius: 14px;
+      font-size: clamp(1rem, 4vw, 1.35rem);
+      font-weight: 700;
+      color: #e8e8f0;
+      cursor: pointer;
+      transition: box-shadow 0.12s ease, filter 0.12s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 0.5rem;
+      appearance: none;
+      -webkit-appearance: none;
+      user-select: none;
+      -webkit-user-select: none;
+      touch-action: manipulation;
+    }
+    button.flash {
+      filter: brightness(1.12);
+      box-shadow: 0 0 0 2px rgba(220, 230, 255, 0.32) inset,
+                  0 0 14px rgba(160, 190, 255, 0.26);
+    }
+    .like { background: linear-gradient(160deg, #1a4a6a, #0d2840); }
+    .dislike { background: linear-gradient(160deg, #4a2a4a, #281428); }
+    .noise { background: linear-gradient(160deg, #5a4a1a, #383008); }
+    .silence { background: linear-gradient(160deg, #1a1a38, #0e0e20); }
+  </style>
+</head>
+<body>
+  <h1>Digital Ripples</h1>
+  <div id="version">v0.1</div>
+  <div id="status">Connecting…</div>
+  <p id="hint" style="display:none;font-size:0.72rem;color:#a65;text-align:center;padding:0 12px 8px;margin:0;line-height:1.35;"></p>
+  <div class="grid">
+    <button type="button" class="like" data-action="LIKE">Like<br><span style="font-weight:500;opacity:0.85;font-size:0.85em">Happy</span></button>
+    <button type="button" class="dislike" data-action="DISLIKE">Dislike<br><span style="font-weight:500;opacity:0.85;font-size:0.85em">Sad</span></button>
+    <button type="button" class="noise" data-action="POSITIVE_COMMENT">+ Comment<br><span style="font-weight:500;opacity:0.85;font-size:0.85em">Noise</span></button>
+    <button type="button" class="silence" data-action="NEGATIVE_COMMENT">− Comment<br><span style="font-weight:500;opacity:0.85;font-size:0.85em">Silence</span></button>
+  </div>
+  <script>
+    (function () {
+      const statusEl = document.getElementById('status');
+      const hintEl = document.getElementById('hint');
+      const params = new URLSearchParams(location.search);
+      const wsOverride = params.get('ws');
+      const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = wsOverride || (proto + '//' + location.host + '/ws');
+      let ws;
+      let reconnectTimer;
+      let relayChecked = false;
+
+      function setStatus(text, cls) {
+        statusEl.textContent = text;
+        statusEl.className = cls || '';
+      }
+
+      function showWrongServerHint() {
+        hintEl.style.display = 'block';
+        hintEl.innerHTML =
+          'The controller needs the <strong>Node</strong> server (WebSockets). In the project folder run ' +
+          '<code style="background:#222;padding:2px 6px;border-radius:4px">npm install</code> then ' +
+          '<code style="background:#222;padding:2px 6px;border-radius:4px">npm start</code> ' +
+          'and open this page at <strong>http://&lt;PC-IP&gt;:8080/controller.html</strong> ' +
+          '(not <code>python -m http.server</code> — it cannot connect the tablet).';
+      }
+
+      function checkRelayThenConnect() {
+        fetch(location.origin + '/__relay_ok', { cache: 'no-store' })
+          .then(function (r) {
+            return r.ok ? r.text() : '';
+          })
+          .then(function (text) {
+            relayChecked = true;
+            if (text.trim() !== 'digital-ripples-relay') {
+              setStatus('Wrong server — see note below', 'error');
+              showWrongServerHint();
+              return;
+            }
+            connect();
+          })
+          .catch(function () {
+            relayChecked = true;
+            setStatus('Cannot reach relay PC', 'error');
+            showWrongServerHint();
+          });
+      }
+
+      function connect() {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        ws = new WebSocket(wsUrl);
+        ws.onopen = function () {
+          hintEl.style.display = 'none';
+          setStatus('Connected — same WiFi as display PC', 'connected');
+        };
+        ws.onclose = function () {
+          setStatus('Disconnected — retrying…', 'error');
+          if (relayChecked) {
+            reconnectTimer = setTimeout(connect, 2000);
+          }
+        };
+        ws.onerror = function () {
+          setStatus('WebSocket error — is the PC on npm start?', 'error');
+        };
+      }
+
+      function sendAction(action) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'input', action: action }));
+        } else {
+          setStatus('Not connected — tap again in a moment', 'error');
+        }
+      }
+
+      document.querySelectorAll('button[data-action]').forEach(function (btn) {
+        let flashTimer = null;
+
+        function triggerFlash() {
+          btn.classList.add('flash');
+          if (flashTimer) {
+            clearTimeout(flashTimer);
+          }
+          flashTimer = setTimeout(function () {
+            btn.classList.remove('flash');
+            flashTimer = null;
+          }, 120);
+        }
+
+        btn.addEventListener('pointerdown', function (ev) {
+          ev.preventDefault();
+          triggerFlash();
+          sendAction(btn.getAttribute('data-action'));
+        });
+      });
+
+      if (wsOverride) {
+        relayChecked = true;
+        connect();
+      } else {
+        checkRelayThenConnect();
+      }
+    })();
+  </script>
+</body>
+</html>
