@@ -30,7 +30,7 @@ let ripples = [];
 let activityManager;
 let soundManager;
 let uiManager;
-let showDebug = false;
+let showDebug = true;
 let isFullscreen = false;
 let backgroundNoise = [];
 let iconBursts = [];
@@ -331,39 +331,39 @@ class Ripple {
         switch(actionType) {
             case ACTIONS.LIKE:
                 return {
-                    maxRadius: 400 * scale,
-                    amplitude: 1.0,
-                    damping: 0.95,
-                    speed: 3.5,
-                    lifespan: 3000,
-                    color: [100, 200, 255, 180] // Bright blue
+                    maxRadius: 530 * scale,
+                    amplitude: 1.15,
+                    damping: 0.956,
+                    speed: 4.25,
+                    lifespan: 4100,
+                    color: [100, 200, 255, 210] // Bright blue
                 };
             case ACTIONS.DISLIKE:
                 return {
-                    maxRadius: 350 * scale,
-                    amplitude: 0.8,
-                    damping: 0.92,
-                    speed: 2.0,
-                    lifespan: 4000,
-                    color: [150, 100, 150, 160] // Muted purple
+                    maxRadius: 470 * scale,
+                    amplitude: 0.96,
+                    damping: 0.928,
+                    speed: 2.28,
+                    lifespan: 5300,
+                    color: [150, 100, 150, 188] // Muted purple
                 };
             case ACTIONS.POSITIVE_COMMENT:
                 return {
-                    maxRadius: 300 * scale,
-                    amplitude: 0.6,
-                    damping: 0.98,
-                    speed: 4.0,
-                    lifespan: 2500,
-                    color: [255, 220, 100, 140] // Golden yellow
+                    maxRadius: 415 * scale,
+                    amplitude: 0.74,
+                    damping: 0.983,
+                    speed: 4.45,
+                    lifespan: 3300,
+                    color: [255, 220, 100, 168] // Golden yellow
                 };
             case ACTIONS.NEGATIVE_COMMENT:
                 return {
-                    maxRadius: 250 * scale,
-                    amplitude: 0.4,
-                    damping: 0.99,
-                    speed: 2.5,
-                    lifespan: 3500,
-                    color: [50, 50, 80, 120] // Dark muted blue
+                    maxRadius: 345 * scale,
+                    amplitude: 0.54,
+                    damping: 0.992,
+                    speed: 2.82,
+                    lifespan: 4500,
+                    color: [50, 50, 80, 145] // Dark muted blue
                 };
         }
     }
@@ -596,23 +596,23 @@ class IconEchoBurst {
 
         const ref = min(width, pondHeight);
         if (this.isSatellite) {
-            this.fadeInMs = 280;
-            this.holdMs = 120;
-            this.fadeOutMs = 450;
+            this.fadeInMs = 310;
+            this.holdMs = 145;
+            this.fadeOutMs = 520;
             this.baseSize = ref * 0.062;
             this.ringCount = 3;
-            this.ringStaggerMs = 72;
-            this.ringTravelMs = 580;
-            this.ringMaxR = ref * 0.2;
+            this.ringStaggerMs = 78;
+            this.ringTravelMs = 700;
+            this.ringMaxR = ref * 0.27;
         } else {
-            this.fadeInMs = 400;
-            this.holdMs = 240;
-            this.fadeOutMs = 680;
+            this.fadeInMs = 440;
+            this.holdMs = 285;
+            this.fadeOutMs = 780;
             this.baseSize = ref * 0.145;
             this.ringCount = 5;
-            this.ringStaggerMs = 88;
-            this.ringTravelMs = 760;
-            this.ringMaxR = ref * 0.36;
+            this.ringStaggerMs = 96;
+            this.ringTravelMs = 920;
+            this.ringMaxR = ref * 0.43;
         }
     }
 
@@ -655,7 +655,7 @@ class IconEchoBurst {
             const u = constrain(t / this.ringTravelMs, 0, 1);
             const radius = u * this.ringMaxR;
             const ringFade = (1 - u) * pr;
-            const a = ringFade * 220;
+            const a = ringFade * 248;
             if (a < 2) continue;
             stroke(accent[0], accent[1], accent[2], a);
             strokeWeight(this.isSatellite ? 2 : 3);
@@ -695,7 +695,7 @@ class IconEchoBurst {
 }
 
 function spawnIconEchoBurst(actionType, rippleX, rippleY) {
-    const jitter = min(52, width * 0.07, pondHeight * 0.07);
+    const jitter = min(82, width * 0.11, pondHeight * 0.11);
     const cx = constrain(rippleX + random(-jitter, jitter), 28, width - 28);
     const cy = constrain(rippleY + random(-jitter, jitter), 28, pondHeight - 28);
     iconBursts.push(new IconEchoBurst(actionType, cx, cy, { isSatellite: false }));
@@ -704,10 +704,10 @@ function spawnIconEchoBurst(actionType, rippleX, rippleY) {
     const ref = min(width, pondHeight);
     for (let s = 0; s < nSat; s++) {
         const angle = random(TWO_PI);
-        const dist = random(ref * 0.095, ref * 0.21);
+        const dist = random(ref * 0.14, ref * 0.36);
         const sx = constrain(cx + cos(angle) * dist, 22, width - 22);
         const sy = constrain(cy + sin(angle) * dist, 22, pondHeight - 22);
-        const delayMs = random(140, 360);
+        const delayMs = random(220, 520);
         iconBursts.push(new IconEchoBurst(actionType, sx, sy, {
             isSatellite: true,
             delayMs,
@@ -1106,21 +1106,12 @@ class UIManager {
     }
     
     render() {
-        if (IS_DISPLAY_MODE) {
-            if (showDebug) {
-                this.renderQuadrantIndicator();
+        if (!IS_DISPLAY_MODE) {
+            for (let button of this.buttons) {
+                this.renderButton(button);
             }
-            return;
         }
-        // Render buttons
-        for (let button of this.buttons) {
-            this.renderButton(button);
-        }
-        
-        // Render quadrant indicator (only in debug mode)
-        if (showDebug) {
-            this.renderQuadrantIndicator();
-        }
+        this.renderQuadrantIndicator();
     }
     
     updateQuadrantPosition(actionType) {
@@ -1181,18 +1172,24 @@ class UIManager {
         strokeWeight(1);
         line(0, 0, xPos, yPos);
         
-        // Labels
+        // Sad / Happy: inside square, vertically centered on horizontal axis (y = 0)
         fill(200, 200, 220);
-        textAlign(CENTER);
+        noStroke();
         textSize(11);
-        
-        // Horizontal axis labels
-        text('Happy', indicatorSize / 2 - 15, -5);
-        text('Sad', -indicatorSize / 2 + 15, -5);
-        
-        // Vertical axis labels
-        text('Noise', -indicatorSize / 2 + 5, -indicatorSize / 2 + 15);
-        text('Silence', -indicatorSize / 2 + 5, indicatorSize / 2 - 5);
+        const edgePad = 12;
+        const hsInset = 14;
+        // Vertically center glyph on horizontal axis (y = 0)
+        const yOnHorizAxis = 0;
+
+        textAlign(LEFT, CENTER);
+        text('Sad', -indicatorSize / 2 + hsInset, yOnHorizAxis);
+        textAlign(RIGHT, CENTER);
+        text('Happy', indicatorSize / 2 - hsInset, yOnHorizAxis);
+
+        textAlign(CENTER, BOTTOM);
+        text('Noise', 0, -indicatorSize / 2 + edgePad + 11);
+        textAlign(CENTER, TOP);
+        text('Silence', 0, indicatorSize / 2 - edgePad - 11);
         
         pop();
     }
@@ -1695,7 +1692,7 @@ function keyPressed() {
         videoBackgroundManager.ensurePlaybackStarted();
     }
     
-    // Toggle debug overlay
+    // Toggle activity-meter debug overlay (quadrant chart stays visible)
     if (key === 'd' || key === 'D') {
         showDebug = !showDebug;
     }
