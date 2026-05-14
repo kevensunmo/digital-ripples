@@ -33,6 +33,7 @@
       user-select: none;
       -webkit-user-select: none;
       pointer-events: none;
+      z-index: 2100;
     }
     #status {
       text-align: center;
@@ -115,9 +116,28 @@
     .ctrl-btn.is-pressed::after {
       opacity: 1;
     }
+    /* Invisible hotspot: 5 taps top-right enables fullscreen */
+    #fullscreenTapZone {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: min(36vw, 180px);
+      height: min(32vh, 160px);
+      z-index: 2000;
+      margin: 0;
+      padding: 0;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
   </style>
 </head>
 <body>
+  <button type="button" id="fullscreenTapZone" aria-label="Tap five times in this corner to enter fullscreen"></button>
   <h1>Digital Ripples</h1>
   <div id="version">v0.1</div>
   <div id="status">Connecting…</div>
@@ -215,6 +235,80 @@
 
       function releasePress(btn) {
         btn.classList.remove('is-pressed');
+      }
+
+      function enterFullscreen() {
+        var root = document.documentElement;
+        if (root.requestFullscreen) {
+          return root.requestFullscreen();
+        }
+        if (root.webkitRequestFullscreen) {
+          return root.webkitRequestFullscreen();
+        }
+        if (document.body && document.body.webkitRequestFullscreen) {
+          return document.body.webkitRequestFullscreen();
+        }
+        return Promise.reject(new Error('Fullscreen not supported'));
+      }
+
+      var fsTapCount = 0;
+      var fsTapTimer = null;
+      var FS_TAPS_NEEDED = 5;
+      var FS_RESET_MS = 2200;
+
+      function resetFullscreenTaps() {
+        fsTapCount = 0;
+        if (fsTapTimer) {
+          clearTimeout(fsTapTimer);
+          fsTapTimer = null;
+        }
+      }
+
+      function bumpFullscreenTap() {
+        fsTapCount++;
+        if (fsTapTimer) clearTimeout(fsTapTimer);
+        fsTapTimer = setTimeout(resetFullscreenTaps, FS_RESET_MS);
+        if (fsTapCount >= FS_TAPS_NEEDED) {
+          resetFullscreenTaps();
+          enterFullscreen().then(function () {
+            setStatus('Fullscreen on', 'connected');
+          }).catch(function () {
+            setStatus('Fullscreen unavailable', 'error');
+            setTimeout(function () {
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                setStatus('Connected — same WiFi as display PC', 'connected');
+              }
+            }, 2500);
+          });
+        }
+      }
+
+      var fsLastCornerTapMs = 0;
+      function registerFullscreenCornerTap() {
+        var now =
+          typeof performance !== 'undefined' && typeof performance.now === 'function'
+            ? performance.now()
+            : Date.now();
+        if (now - fsLastCornerTapMs < 380) return;
+        fsLastCornerTapMs = now;
+        bumpFullscreenTap();
+      }
+
+      var fsZone = document.getElementById('fullscreenTapZone');
+      if (fsZone) {
+        fsZone.addEventListener(
+          'touchstart',
+          function (ev) {
+            if (ev.cancelable) ev.preventDefault();
+            registerFullscreenCornerTap();
+          },
+          { passive: false }
+        );
+        fsZone.addEventListener('pointerdown', function (ev) {
+          if (ev.pointerType === 'touch') return;
+          ev.preventDefault();
+          registerFullscreenCornerTap();
+        });
       }
 
       document.querySelectorAll('button[data-action]').forEach(function (btn) {
