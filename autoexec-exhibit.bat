@@ -17,7 +17,8 @@ if not defined CHROME (
   exit /b 1
 )
 
+rem Allow muted video autoplay without a tap (matches kiosk display mode)
 set "URL=http://127.0.0.1:8080/display.html"
-start "" "%CHROME%" --kiosk --start-fullscreen "%URL%"
+start "" "%CHROME%" --autoplay-policy=no-user-gesture-required --kiosk --start-fullscreen "%URL%"
 
 endlocal

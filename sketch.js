@@ -136,20 +136,66 @@ class VideoBackgroundManager {
                 v.elt.playbackRate = 1;
             } catch (e) { /* ignore */ }
             this.clips[id] = v;
+            this._primeVideoElement(v);
+        }
+
+        if (IS_DISPLAY_MODE) {
+            const seed = this.clips[DEFAULT_QUADRANT_VIDEO_ID];
+            const el = seed && seed.elt;
+            if (el) {
+                const kick = () => {
+                    if (!this.playbackStarted) this.ensurePlaybackStarted();
+                };
+                if (el.readyState >= 3) queueMicrotask(kick);
+                else el.addEventListener('canplay', kick, { once: true });
+            }
         }
     }
 
-    /** Call after first user gesture so browsers allow playback */
+    _primeVideoElement(v) {
+        const el = v && v.elt;
+        if (!el) return;
+        el.muted = true;
+        el.defaultMuted = true;
+        el.playsInline = true;
+        try {
+            el.setAttribute('playsinline', '');
+            el.setAttribute('muted', '');
+        } catch (e) { /* ignore */ }
+    }
+
+    /** Start looping muted clips (needs user gesture unless video is muted + kiosk / permissive autoplay). */
     ensurePlaybackStarted() {
         if (this.playbackStarted) return;
         this.playbackStarted = true;
         for (const id of Object.keys(this.clips)) {
             const v = this.clips[id];
+            this._primeVideoElement(v);
             v.loop();
             if (id === this.foregroundId) {
-                v.play();
+                const p = v.play();
+                if (p !== undefined && typeof p.catch === 'function') p.catch(() => {});
             } else {
-                v.pause();
+                try {
+                    v.pause();
+                } catch (e) { /* ignore */ }
+            }
+        }
+    }
+
+    /** Display / kiosk: keep videos unpaused if the browser blocked the first play() */
+    maintainKioskAutoplay() {
+        if (!IS_DISPLAY_MODE) return;
+        for (const id of [this.foregroundId, this.backgroundId]) {
+            if (id == null) continue;
+            const v = this.clips[id];
+            if (!v?.elt) continue;
+            this._primeVideoElement(v);
+            const el = v.elt;
+            if (el.readyState >= 2 && el.paused) {
+                v.loop();
+                const p = v.play();
+                if (p !== undefined && typeof p.catch === 'function') p.catch(() => {});
             }
         }
     }
@@ -185,9 +231,15 @@ class VideoBackgroundManager {
             incoming.time(0);
         } catch (e) { /* some browsers */ }
         incoming.loop();
-        incoming.play();
+        this._primeVideoElement(incoming);
+        let pin = incoming.play();
+        if (pin !== undefined && typeof pin.catch === 'function') pin.catch(() => {});
         const out = this.clips[this.backgroundId];
-        if (out) out.play();
+        if (out) {
+            this._primeVideoElement(out);
+            let pout = out.play();
+            if (pout !== undefined && typeof pout.catch === 'function') pout.catch(() => {});
+        }
     }
 
     updateFromQuadrant(hs, ns) {
@@ -1554,6 +1606,9 @@ function setup() {
     
     if (IS_DISPLAY_MODE) {
         connectDisplayInputSocket();
+        if (videoBackgroundManager) {
+            videoBackgroundManager.ensurePlaybackStarted();
+        }
     }
 }
 
@@ -1602,6 +1657,9 @@ function draw() {
     
     // Quadrant-driven video layer + smooth crossfade
     if (videoBackgroundManager) {
+        if (IS_DISPLAY_MODE) {
+            videoBackgroundManager.maintainKioskAutoplay();
+        }
         videoBackgroundManager.updateFromQuadrant(
             quadrantPosition.happySad,
             quadrantPosition.noiseSilence
