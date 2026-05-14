@@ -4,8 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Digital Ripples - Interactive Installation</title>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/addons/p5.sound.min.js"></script>
     <style>
         body {
             margin: 0;
@@ -20,6 +18,27 @@
     </style>
 </head>
 <body>
-    <script src="sketch.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/p5.js"></script>
+    <script>
+(function () {
+    var P5_SOUND = 'https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.7.0/addons/p5.sound.min.js';
+    function appendScript(src, onload, onerror) {
+        var s = document.createElement('script');
+        s.src = src;
+        s.onload = onload;
+        s.onerror = onerror || onload;
+        document.body.appendChild(s);
+    }
+    function loadSketch() {
+        appendScript('sketch.js');
+    }
+    // AudioWorklet (used by p5.sound) is unavailable on plain http:// LAN origins; loading the addon would reject and break the sketch.
+    if (window.isSecureContext) {
+        appendScript(P5_SOUND, loadSketch);
+    } else {
+        loadSketch();
+    }
+})();
+    </script>
 </body>
 </html>

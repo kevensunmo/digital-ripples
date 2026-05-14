@@ -1,6 +1,6 @@
 /**
  * Local HTTP + WebSocket server for dual-display setup:
- * - Monitor: http://<this-pc-ip>:8080/index.html?mode=display  (video + ripples)
+ * - Monitor: http://<this-pc-ip>:8080/display.html  (video + ripples; tablet controls)
  * - Tablet:  http://<this-pc-ip>:8080/controller.html         (buttons only)
  *
  * Run: npm install && npm start
@@ -102,7 +102,9 @@ server.on('upgrade', (req, socket, head) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Digital Ripples server http://0.0.0.0:${PORT}/`);
-  console.log(`  Display:  http://<this-machine-ip>:${PORT}/index.html?mode=display`);
-  console.log(`  Tablet:   http://<this-machine-ip>:${PORT}/controller.html`);
-  console.log(`  WebSocket: ws://<this-machine-ip>:${PORT}/ws`);
+  console.log(`  Display (monitor): http://<this-machine-ip>:${PORT}/display.html`);
+  console.log(`    (same as index.html?mode=display — hides buttons & listens for tablet)`);
+  console.log(`  Combined UI test: http://<this-machine-ip>:${PORT}/index.html`);
+  console.log(`  Tablet:           http://<this-machine-ip>:${PORT}/controller.html`);
+  console.log(`  WebSocket:        ws://<this-machine-ip>:${PORT}/ws`);
 });

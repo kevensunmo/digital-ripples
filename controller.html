@@ -53,34 +53,68 @@
       max-width: 900px;
       margin: 0 auto;
     }
-    button {
-      border: 2px solid #445;
-      border-radius: 14px;
-      font-size: clamp(1rem, 4vw, 1.35rem);
-      font-weight: 700;
-      color: #e8e8f0;
+    .ctrl-btn {
+      position: relative;
+      --ctrl-radius: clamp(14px, 3.5vw, 22px);
+      border-radius: var(--ctrl-radius);
+      border: none;
+      padding: 0;
       cursor: pointer;
-      transition: box-shadow 0.12s ease, filter 0.12s ease;
       display: flex;
-      align-items: center;
-      justify-content: center;
-      text-align: center;
-      padding: 0.5rem;
+      align-items: stretch;
+      justify-content: stretch;
+      min-height: 0;
+      min-width: 0;
+      overflow: visible;
+      background: transparent;
       appearance: none;
       -webkit-appearance: none;
       user-select: none;
       -webkit-user-select: none;
       touch-action: manipulation;
+      transition: transform 0.1s ease;
     }
-    button.flash {
-      filter: brightness(1.12);
-      box-shadow: 0 0 0 2px rgba(220, 230, 255, 0.32) inset,
-                  0 0 14px rgba(160, 190, 255, 0.26);
+    .ctrl-btn img {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      pointer-events: none;
+      display: block;
+      position: relative;
+      z-index: 0;
+      transition: filter 0.18s ease;
     }
-    .like { background: linear-gradient(160deg, #1a4a6a, #0d2840); }
-    .dislike { background: linear-gradient(160deg, #4a2a4a, #281428); }
-    .noise { background: linear-gradient(160deg, #5a4a1a, #383008); }
-    .silence { background: linear-gradient(160deg, #1a1a38, #0e0e20); }
+    /* Front-lit overlay: bright center → transparent edge (follows rounded rect). */
+    .ctrl-btn::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-radius: var(--ctrl-radius);
+      z-index: 1;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.18s ease;
+      background: radial-gradient(
+        ellipse 64% 60% at 50% 46%,
+        rgba(255, 255, 255, 0.52) 0%,
+        rgba(235, 242, 255, 0.26) 30%,
+        rgba(190, 210, 255, 0.09) 54%,
+        transparent 70%
+      );
+    }
+    .ctrl-btn:active img,
+    .ctrl-btn.is-pressed img {
+      filter: brightness(1.06);
+    }
+    .ctrl-btn:active,
+    .ctrl-btn.is-pressed {
+      transform: scale(0.985);
+    }
+    .ctrl-btn:active::after,
+    .ctrl-btn.is-pressed::after {
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -89,10 +123,18 @@
   <div id="status">Connecting…</div>
   <p id="hint" style="display:none;font-size:0.72rem;color:#a65;text-align:center;padding:0 12px 8px;margin:0;line-height:1.35;"></p>
   <div class="grid">
-    <button type="button" class="like" data-action="LIKE">Like<br><span style="font-weight:500;opacity:0.85;font-size:0.85em">Happy</span></button>
-    <button type="button" class="dislike" data-action="DISLIKE">Dislike<br><span style="font-weight:500;opacity:0.85;font-size:0.85em">Sad</span></button>
-    <button type="button" class="noise" data-action="POSITIVE_COMMENT">+ Comment<br><span style="font-weight:500;opacity:0.85;font-size:0.85em">Noise</span></button>
-    <button type="button" class="silence" data-action="NEGATIVE_COMMENT">− Comment<br><span style="font-weight:500;opacity:0.85;font-size:0.85em">Silence</span></button>
+    <button type="button" class="ctrl-btn" data-action="LIKE" aria-label="Like, Happy">
+      <img src="assets/icons/Like.png" alt="">
+    </button>
+    <button type="button" class="ctrl-btn" data-action="DISLIKE" aria-label="Dislike, Sad">
+      <img src="assets/icons/Dislike.png" alt="">
+    </button>
+    <button type="button" class="ctrl-btn" data-action="POSITIVE_COMMENT" aria-label="Positive comment, Noise">
+      <img src="assets/icons/Positive_Comment.png" alt="">
+    </button>
+    <button type="button" class="ctrl-btn" data-action="NEGATIVE_COMMENT" aria-label="Negative comment, Silence">
+      <img src="assets/icons/Negative_Comment.png" alt="">
+    </button>
   </div>
   <script>
     (function () {
@@ -171,24 +213,28 @@
         }
       }
 
+      function releasePress(btn) {
+        btn.classList.remove('is-pressed');
+      }
+
       document.querySelectorAll('button[data-action]').forEach(function (btn) {
-        let flashTimer = null;
-
-        function triggerFlash() {
-          btn.classList.add('flash');
-          if (flashTimer) {
-            clearTimeout(flashTimer);
-          }
-          flashTimer = setTimeout(function () {
-            btn.classList.remove('flash');
-            flashTimer = null;
-          }, 120);
-        }
-
         btn.addEventListener('pointerdown', function (ev) {
           ev.preventDefault();
-          triggerFlash();
+          btn.classList.add('is-pressed');
+          try {
+            btn.setPointerCapture(ev.pointerId);
+          } catch (e) { /* ignore */ }
           sendAction(btn.getAttribute('data-action'));
+        });
+
+        btn.addEventListener('pointerup', function () {
+          releasePress(btn);
+        });
+        btn.addEventListener('pointercancel', function () {
+          releasePress(btn);
+        });
+        btn.addEventListener('lostpointercapture', function () {
+          releasePress(btn);
         });
       });
 

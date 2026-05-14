@@ -2,8 +2,8 @@
 // Digital Ripples - Interactive Installation
 // ============================================================================
 //
-// Modes (URL): default = buttons on this screen. ?mode=display = video wall only;
-// use tablet at http://<PC-ip>:8080/controller.html with npm start (see server.mjs).
+// Modes (URL): default index.html = buttons on this screen.
+// Monitor + tablet: open display.html (or index.html?mode=display) on the PC; controller.html on the tablet (npm start — see server.mjs).
 
 // Layout (responsive: updated in setup and windowResized)
 let uiPanelHeight = 200; // Height of bottom UI panel
@@ -43,6 +43,16 @@ function detectAppMode() {
 detectAppMode();
 
 let displayInputSocket = null;
+
+/** p5.sound uses AudioWorklet; browsers only expose it in a secure context (https or localhost). Plain http://<LAN-ip> is not secure → skip synth audio instead of crashing. */
+function canUsePSound() {
+    return (
+        typeof window !== 'undefined' &&
+        window.isSecureContext === true &&
+        typeof p5 !== 'undefined' &&
+        typeof p5.Oscillator === 'function'
+    );
+}
 
 // Quadrant tracking (persistent values)
 let quadrantPosition = {
@@ -289,8 +299,8 @@ class Ripple {
         }
     }
     
-    update(currentTime) {
-        this.age = currentTime - this.startTime;
+    update(timeMs) {
+        this.age = timeMs - this.startTime;
         return this.age < this.lifespan;
     }
     
@@ -459,7 +469,7 @@ class Ripple {
     }
     
     // Check if this ripple should damp another ripple (negative comment effect)
-    shouldDamp(otherRipple, currentTime) {
+    shouldDamp(otherRipple) {
         if (this.actionType !== ACTIONS.NEGATIVE_COMMENT) return false;
         if (otherRipple === this) return false;
         
@@ -608,7 +618,24 @@ class SoundManager {
         this.ambientGain = null;
         this.masterVolume = 0.5;
         this.isMuted = false;
-        this.initAmbient();
+        this.audioEnabled = canUsePSound();
+        if (!this.audioEnabled) {
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn(
+                    'Digital Ripples: Web Audio (p5.sound) needs a secure context. Use https:// or localhost for sound; visuals still work over http:// on your LAN.'
+                );
+            }
+            return;
+        }
+        try {
+            this.initAmbient();
+        } catch (e) {
+            this.audioEnabled = false;
+            this.ambientOsc = null;
+            if (typeof console !== 'undefined' && console.warn) {
+                console.warn('Digital Ripples: Web Audio failed to start; continuing without sound.', e);
+            }
+        }
     }
     
     initAmbient() {
@@ -629,7 +656,7 @@ class SoundManager {
     }
     
     playActionSound(actionType) {
-        if (this.isMuted) return;
+        if (!this.audioEnabled || this.isMuted) return;
         
         switch(actionType) {
             case ACTIONS.LIKE:
@@ -725,7 +752,7 @@ class SoundManager {
     }
     
     updateAmbient(activityMeter) {
-        if (!this.ambientOsc) return;
+        if (!this.audioEnabled || !this.ambientOsc) return;
         
         // Increase ambient harshness as meter rises
         const baseAmp = 0.05;
@@ -745,14 +772,14 @@ class SoundManager {
     
     mute() {
         this.isMuted = true;
-        if (this.ambientOsc) {
+        if (this.audioEnabled && this.ambientOsc) {
             this.ambientOsc.amp(0);
         }
     }
     
     unmute() {
         this.isMuted = false;
-        if (this.ambientOsc) {
+        if (this.audioEnabled && this.ambientOsc) {
             this.ambientOsc.amp(0.05 * this.masterVolume);
         }
     }
@@ -1276,7 +1303,7 @@ function windowResized() {
 }
 
 function draw() {
-    const currentTime = millis();
+    const nowMs = millis();
     
     // Update activity manager
     activityManager.update();
@@ -1308,12 +1335,12 @@ function draw() {
     
     // Update and render ripples
     ripples = ripples.filter(ripple => {
-        const alive = ripple.update(currentTime);
+        const alive = ripple.update(nowMs);
         if (alive) {
             // Check for damping from negative comment ripples
             let shouldDamp = false;
             for (let other of ripples) {
-                if (other.shouldDamp(ripple, currentTime)) {
+                if (other.shouldDamp(ripple)) {
                     shouldDamp = true;
                     break;
                 }
