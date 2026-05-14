@@ -72,7 +72,37 @@ let pondGrainBuffer = null;
 let pondGrainW = 0;
 let pondGrainH = 0;
 let pondGrainLastFrame = -1;
-const POND_GRAIN_FRAME_SKIP = 2; // refresh grain every N draw frames
+const POND_GRAIN_FRAME_SKIP = 2; // minimum frames between grain CPU refresh (scaled up on huge canvases)
+
+function pondPixelsApprox() {
+    return max(0, width) * max(0, pondHeight);
+}
+
+/** Fewer grain cells when fullscreen / large monitors — keeps loadPixels/updatePixels cheap */
+function pondGrainGridDims() {
+    const px = pondPixelsApprox();
+    let divisor = 5;
+    if (px > 3000000) divisor = 14;
+    else if (px > 2000000) divisor = 11;
+    else if (px > 1200000) divisor = 8;
+    else if (px > 700000) divisor = 6;
+    return {
+        gw: max(36, ceil(width / divisor)),
+        gh: max(28, ceil(pondHeight / divisor)),
+    };
+}
+
+function pondGrainRefreshSkip() {
+    const px = pondPixelsApprox();
+    if (px > 3000000) return 6;
+    if (px > 2000000) return 5;
+    if (px > 1200000) return 4;
+    if (px > 700000) return 3;
+    return POND_GRAIN_FRAME_SKIP;
+}
+
+/** Avoid unbounded ripple overlap cost when inputs spam */
+const MAX_RIPPLES = 36;
 
 // ============================================================================
 // VIDEO BACKGROUND (quadrant pair + crossfade)
@@ -88,6 +118,10 @@ class VideoBackgroundManager {
         this.lastStableId = DEFAULT_QUADRANT_VIDEO_ID;
         this.deadZone = 0.1;
         this.playbackStarted = false;
+        /** Downscaled intermediate blit — fewer pixels sampled per frame on huge canvases */
+        this._videoScratch = null;
+        this._scratchIw = 0;
+        this._scratchIh = 0;
     }
 
     preloadAssets() {
@@ -179,6 +213,28 @@ class VideoBackgroundManager {
         this.backgroundId = null;
     }
 
+    /** Max longer edge (px) for video texture upload; scales with pond area */
+    getVideoTextureCap() {
+        const px = max(0, width) * max(0, pondHeight);
+        if (px > 3500000) return 960;
+        if (px > 2500000) return 1120;
+        if (px > 1600000) return 1280;
+        if (px > 900000) return 1536;
+        return 2200;
+    }
+
+    ensureVideoScratch(sw, sh) {
+        const iw = max(160, ceil(sw));
+        const ih = max(120, ceil(sh));
+        if (!this._videoScratch || this._scratchIw !== iw || this._scratchIh !== ih) {
+            this._videoScratch = createGraphics(iw, ih);
+            this._videoScratch.pixelDensity(1);
+            this._scratchIw = iw;
+            this._scratchIh = ih;
+        }
+        return this._videoScratch;
+    }
+
     /** object-fit: cover in pond area */
     drawVideoCover(vid, alpha) {
         if (!vid || vid.width <= 0) return;
@@ -191,9 +247,34 @@ class VideoBackgroundManager {
         const dh = vh * scale;
         const ox = (w - dw) / 2;
         const oy = (h - dh) / 2;
+
+        const cap = this.getVideoTextureCap();
+        const maxSide = max(dw, dh);
+        const q = maxSide > cap ? cap / maxSide : 1;
+
+        if (q >= 0.999) {
+            push();
+            tint(255, alpha);
+            image(vid, ox, oy, dw, dh);
+            pop();
+            return;
+        }
+
+        const tw = dw * q;
+        const th = dh * q;
+        const g = this.ensureVideoScratch(tw, th);
+        g.push();
+        g.clear();
+        g.imageMode(CORNER);
+        g.noStroke();
+        g.tint(255, alpha);
+        g.image(vid, 0, 0, tw, th);
+        g.pop();
+
         push();
-        tint(255, alpha);
-        image(vid, ox, oy, dw, dh);
+        imageMode(CORNER);
+        noStroke();
+        image(g, ox, oy, dw, dh);
         pop();
     }
 
@@ -397,7 +478,7 @@ class Ripple {
             
             // Drooping effect - distort the circle
             beginShape();
-            for (let angle = 0; angle < TWO_PI; angle += 0.1) {
+            for (let angle = 0; angle < TWO_PI; angle += 0.18) {
                 const droop = sin(angle * 3 + this.age * 0.01) * 5;
                 const x = this.x + cos(angle) * (ringRadius + droop);
                 const y = this.y + sin(angle) * (ringRadius + droop * 0.5);
@@ -1246,6 +1327,7 @@ function fireInputAction(action) {
     }
     uiManager.updateQuadrantPosition(action);
     const spawn = getSpawnPoint(action);
+    while (ripples.length >= MAX_RIPPLES) ripples.shift();
     ripples.push(new Ripple(spawn.x, spawn.y, action, millis()));
     spawnIconEchoBurst(action, spawn.x, spawn.y);
     activityManager.addActivity(action);
@@ -1322,14 +1404,52 @@ function renderActivityMeterDebug() {
     text(`Activity: ${activityManager.getMeter().toFixed(2)} [${state}]`, meterX, meterY - 5);
 }
 
+/** Red "OVERLOAD" center label with shake + chromatic glitch while state is OVERLOAD */
+function renderOverloadGlitchText() {
+    if (activityManager.getState() !== STATE.OVERLOAD) return;
+
+    const cx = width * 0.5;
+    const cy = pondHeight * 0.5;
+    const elapsed = millis() - activityManager.overloadStartTime;
+    const stress = constrain(elapsed / 2000, 0, 1);
+    const shake = 5 + stress * 10 + random(0, 3);
+
+    push();
+    textAlign(CENTER, CENTER);
+    textStyle(BOLD);
+    textSize(constrain(min(width, pondHeight) * 0.1, 32, 130));
+    noStroke();
+
+    const jx = random(-shake, shake);
+    const jy = random(-shake, shake);
+
+    const label = 'OVERLOAD';
+    const layer = (r, g, b, a, ox, oy) => {
+        fill(r, g, b, a);
+        text(label, cx + jx + ox, cy + jy + oy);
+    };
+
+    if (random() < 0.55) layer(255, 40, 90, random(70, 135), random(5, 12), random(-4, 4));
+    if (random() < 0.48) layer(105, 220, 255, random(50, 105), random(-12, -5), random(-4, 4));
+    if (random() < 0.08) layer(255, 255, 255, random(100, 200), random(-16, 16), random(-10, 10));
+
+    layer(230, 18, 35, 255, 0, 0);
+
+    if (random() < 0.22) {
+        layer(55, 0, 15, 175, random(4, 9), random(3, 8));
+        layer(230, 18, 35, 255, 0, 0);
+    }
+
+    pop();
+}
+
 // ============================================================================
 // BACKGROUND RENDERING
 // ============================================================================
 
 /** Resize / refresh low-resolution grain texture (cheap vs tens of thousands of rects per frame) */
 function updatePondGrainBuffer(turbulence) {
-    const gw = max(32, ceil(width / 5));
-    const gh = max(24, ceil(pondHeight / 5));
+    const { gw, gh } = pondGrainGridDims();
     if (!pondGrainBuffer || pondGrainW !== gw || pondGrainH !== gh) {
         pondGrainBuffer = createGraphics(gw, gh);
         pondGrainBuffer.pixelDensity(1);
@@ -1337,7 +1457,8 @@ function updatePondGrainBuffer(turbulence) {
         pondGrainH = gh;
         pondGrainLastFrame = -1;
     }
-    if (pondGrainLastFrame >= 0 && frameCount - pondGrainLastFrame < POND_GRAIN_FRAME_SKIP) {
+    const skip = pondGrainRefreshSkip();
+    if (pondGrainLastFrame >= 0 && frameCount - pondGrainLastFrame < skip) {
         return;
     }
     pondGrainLastFrame = frameCount;
@@ -1367,29 +1488,33 @@ function renderBackground() {
     rect(0, 0, width, pondHeight * 0.45);
     pop();
 
-    // Scaled grain image from small offscreen buffer
+    // Scaled grain image — skip near-full blackout and skip CPU refresh less often on huge canvases
     const turbulence = activityManager.getBackgroundTurbulence();
-    updatePondGrainBuffer(turbulence);
-    if (pondGrainBuffer) {
-        push();
-        imageMode(CORNER);
-        tint(255, 200);
-        image(pondGrainBuffer, 0, 0, width, pondHeight);
-        noTint();
-        pop();
+    const boEarly = activityManager.getBlackoutAlpha();
+    if (boEarly < 235) {
+        updatePondGrainBuffer(turbulence);
+        if (pondGrainBuffer) {
+            push();
+            imageMode(CORNER);
+            tint(255, 200);
+            image(pondGrainBuffer, 0, 0, width, pondHeight);
+            noTint();
+            pop();
+        }
     }
 
-    // Vignette effect
+    // Vignette (few wide rings — cheaper than many tight ellipses at 4K fullscreen)
     const vignette = activityManager.getVignetteIntensity();
     if (vignette > 0) {
         push();
         noFill();
-        for (let r = 0; r < 8; r++) {
-            const alpha = vignette * (1 - r / 8) * 25;
+        const rings = 4;
+        for (let r = 0; r < rings; r++) {
+            const alpha = vignette * (1 - r / rings) * 48;
             stroke(0, 0, 0, alpha);
-            strokeWeight(3);
-            ellipse(width / 2, pondHeight / 2, 
-                   width * 1.5 - r * 60, pondHeight * 1.5 - r * 60);
+            strokeWeight(14);
+            ellipse(width / 2, pondHeight / 2,
+                width * 1.5 - r * 120, pondHeight * 1.5 - r * 120);
         }
         pop();
     }
@@ -1533,6 +1658,8 @@ function draw() {
         noStroke();
         rect(0, 0, width, pondHeight);
     }
+
+    renderOverloadGlitchText();
 }
 
 // ============================================================================
