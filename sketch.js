@@ -33,6 +33,8 @@ let uiManager;
 let showDebug = false;
 let isFullscreen = false;
 let backgroundNoise = [];
+let iconBursts = [];
+let actionIconImages = new Map();
 
 /** true when monitor shows only pond/video; controls come from controller.html over WebSocket */
 let IS_DISPLAY_MODE = false;
@@ -479,6 +481,156 @@ class Ripple {
         const absorptionRadius = this.getCurrentRadius() * 1.5;
         
         return distance < absorptionRadius;
+    }
+}
+
+// ============================================================================
+// ACTION ICON ECHO (random _Icon PNGs: zoom + fade + rings + satellite echoes)
+// ============================================================================
+
+function getActionAccentRgb(actionType) {
+    switch (actionType) {
+        case ACTIONS.LIKE:
+            return [100, 200, 255];
+        case ACTIONS.DISLIKE:
+            return [150, 100, 150];
+        case ACTIONS.POSITIVE_COMMENT:
+            return [255, 220, 100];
+        case ACTIONS.NEGATIVE_COMMENT:
+            return [90, 95, 140];
+        default:
+            return [180, 190, 220];
+    }
+}
+
+class IconEchoBurst {
+    constructor(actionType, cx, cy, options = {}) {
+        this.actionType = actionType;
+        this.cx = cx;
+        this.cy = cy;
+        this.isSatellite = options.isSatellite === true;
+        this.delayMs = options.delayMs || 0;
+        this.placedMs = millis();
+        this.activeAtMs = this.placedMs + this.delayMs;
+
+        const ref = min(width, pondHeight);
+        if (this.isSatellite) {
+            this.fadeInMs = 280;
+            this.holdMs = 120;
+            this.fadeOutMs = 450;
+            this.baseSize = ref * 0.062;
+            this.ringCount = 3;
+            this.ringStaggerMs = 72;
+            this.ringTravelMs = 580;
+            this.ringMaxR = ref * 0.2;
+        } else {
+            this.fadeInMs = 400;
+            this.holdMs = 240;
+            this.fadeOutMs = 680;
+            this.baseSize = ref * 0.145;
+            this.ringCount = 5;
+            this.ringStaggerMs = 88;
+            this.ringTravelMs = 760;
+            this.ringMaxR = ref * 0.36;
+        }
+    }
+
+    totalMs() {
+        return this.fadeInMs + this.holdMs + this.fadeOutMs;
+    }
+
+    /** 0–1 visibility envelope (fade in, hold, fade out) */
+    presence(elapsed) {
+        if (elapsed <= 0) return 0;
+        if (elapsed < this.fadeInMs) {
+            const u = elapsed / this.fadeInMs;
+            return 1 - pow(1 - u, 3);
+        }
+        if (elapsed < this.fadeInMs + this.holdMs) return 1;
+        if (elapsed < this.totalMs()) {
+            const u = (elapsed - this.fadeInMs - this.holdMs) / this.fadeOutMs;
+            return 1 - u * u;
+        }
+        return 0;
+    }
+
+    scaleForTime(elapsed) {
+        if (elapsed <= 0) return 0.2;
+        if (elapsed < this.fadeInMs) {
+            const u = elapsed / this.fadeInMs;
+            const e = 1 - pow(1 - u, 3);
+            return lerp(0.26, 1, e);
+        }
+        if (elapsed < this.fadeInMs + this.holdMs) return 1;
+        const u = constrain((elapsed - this.fadeInMs - this.holdMs) / this.fadeOutMs, 0, 1);
+        return lerp(1, 1.07, sin(u * PI));
+    }
+
+    drawRings(elapsed, pr, accent) {
+        noFill();
+        for (let i = 0; i < this.ringCount; i++) {
+            const t = elapsed - i * this.ringStaggerMs;
+            if (t < 0) continue;
+            const u = constrain(t / this.ringTravelMs, 0, 1);
+            const radius = u * this.ringMaxR;
+            const ringFade = (1 - u) * pr;
+            const a = ringFade * 220;
+            if (a < 2) continue;
+            stroke(accent[0], accent[1], accent[2], a);
+            strokeWeight(this.isSatellite ? 2 : 3);
+            ellipse(this.cx, this.cy, radius * 2, radius * 2);
+        }
+    }
+
+    drawIcon(elapsed, pr, img) {
+        const scaleAnim = this.scaleForTime(elapsed);
+        const alpha = 255 * pr;
+        tint(255, alpha);
+        imageMode(CENTER);
+        const h = this.baseSize * scaleAnim;
+        const w = h * (img.width / img.height);
+        image(img, this.cx, this.cy, w, h);
+        noTint();
+    }
+
+    /** Renders burst; returns false when finished (drop from list). */
+    stepAndDraw(nowMs) {
+        if (nowMs < this.activeAtMs) return true;
+        const elapsed = nowMs - this.activeAtMs;
+        if (elapsed >= this.totalMs()) return false;
+
+        const img = actionIconImages.get(this.actionType);
+        const accent = getActionAccentRgb(this.actionType);
+        const pr = this.presence(elapsed);
+
+        push();
+        this.drawRings(elapsed, pr, accent);
+        if (img && img.width > 0 && pr > 0.02) {
+            this.drawIcon(elapsed, pr, img);
+        }
+        pop();
+        return true;
+    }
+}
+
+function spawnIconEchoBurst(actionType, rippleX, rippleY) {
+    const jitter = min(52, width * 0.07, pondHeight * 0.07);
+    const cx = constrain(rippleX + random(-jitter, jitter), 28, width - 28);
+    const cy = constrain(rippleY + random(-jitter, jitter), 28, pondHeight - 28);
+    iconBursts.push(new IconEchoBurst(actionType, cx, cy, { isSatellite: false }));
+
+    const nSat = 2 + floor(random() * 2);
+    const ref = min(width, pondHeight);
+    for (let s = 0; s < nSat; s++) {
+        const angle = random(TWO_PI);
+        const dist = random(ref * 0.095, ref * 0.21);
+        const sx = constrain(cx + cos(angle) * dist, 22, width - 22);
+        const sy = constrain(cy + sin(angle) * dist, 22, pondHeight - 22);
+        const delayMs = random(140, 360);
+        iconBursts.push(new IconEchoBurst(actionType, sx, sy, {
+            isSatellite: true,
+            delayMs,
+        }));
     }
 }
 
@@ -1095,6 +1247,7 @@ function fireInputAction(action) {
     uiManager.updateQuadrantPosition(action);
     const spawn = getSpawnPoint(action);
     ripples.push(new Ripple(spawn.x, spawn.y, action, millis()));
+    spawnIconEchoBurst(action, spawn.x, spawn.y);
     activityManager.addActivity(action);
     soundManager.playActionSound(action);
 }
@@ -1257,6 +1410,10 @@ function renderBackground() {
 function preload() {
     videoBackgroundManager = new VideoBackgroundManager();
     videoBackgroundManager.preloadAssets();
+    actionIconImages.set(ACTIONS.LIKE, loadImage('assets/icons/Like_Icon.png'));
+    actionIconImages.set(ACTIONS.DISLIKE, loadImage('assets/icons/Dislike_Icon.png'));
+    actionIconImages.set(ACTIONS.POSITIVE_COMMENT, loadImage('assets/icons/Positive_Comment_Icon.png'));
+    actionIconImages.set(ACTIONS.NEGATIVE_COMMENT, loadImage('assets/icons/Negative_Comment_Icon.png'));
 }
 
 function setup() {
@@ -1360,6 +1517,8 @@ function draw() {
         }
         return alive;
     });
+    
+    iconBursts = iconBursts.filter((b) => b.stepAndDraw(nowMs));
     
     // Render debug overlay
     renderDebugOverlay();
