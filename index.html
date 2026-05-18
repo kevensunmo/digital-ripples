@@ -4,6 +4,18 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Digital Ripples - Interactive Installation</title>
+    <script>
+    (function () {
+        var params = new URLSearchParams(window.location.search);
+        if (!params.has('mode')) {
+            params.set('mode', 'display');
+            var qs = params.toString();
+            window.location.replace(
+                window.location.pathname + (qs ? '?' + qs : '') + window.location.hash
+            );
+        }
+    })();
+    </script>
     <style>
         body {
             margin: 0;

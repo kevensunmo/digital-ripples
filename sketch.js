@@ -2,8 +2,9 @@
 // Digital Ripples - Interactive Installation
 // ============================================================================
 //
-// Modes (URL): default index.html = buttons on this screen.
-// Monitor + tablet: open display.html (or index.html?mode=display) on the PC; controller.html on the tablet (npm start — see server.mjs).
+// Modes (URL): index.html adds ?mode=display when mode is omitted (projector / kiosk).
+// Single-screen test with on-canvas buttons: index.html?mode=combined
+// display.html still redirects to index.html?mode=display. Tablet: controller.html (npm start — see server.mjs).
 
 // Layout (responsive: updated in setup and windowResized)
 let uiPanelHeight = 200; // Height of bottom UI panel

@@ -14,10 +14,10 @@ An interactive p5.js installation featuring a "digital pond" that responds to us
 
 ## Quick Start
 
-1. Open `index.html` in a web browser
-2. Click buttons or use keys 1-4 to trigger actions
-3. Press 'D' to toggle debug mode
-4. Press 'F' to toggle fullscreen
+1. Open `index.html` in a web browser (defaults to **display** / projector layout: full pond, no on-screen buttons — use `controller.html` over `npm start`, or keys **1–4** to test).
+2. For the **classic single-page** layout (buttons + pond), open `index.html?mode=combined`
+3. Press `D` to toggle debug activity meter (quadrant chart remains)
+4. Press `F` for fullscreen
 
 ## Development
 
@@ -29,14 +29,14 @@ An interactive p5.js installation featuring a "digital pond" that responds to us
 python3 -m http.server 8000
 ```
 
-Then open `http://localhost:8000` in your browser.
+Then open `http://localhost:8000` (defaults to **display** — use `http://localhost:8000/index.html?mode=combined` if you want buttons on the same page).
 
 **Option B — tablet + monitor on the same WiFi (buttons on tablet, video on PC):**
 
 1. On the **computer** connected to the monitor, install once: `npm install`
 2. Start: `npm start` (listens on `0.0.0.0`, default port **8080**; override with `PORT=9000 npm start`)
 3. Find this machine’s **LAN IP** (e.g. System Settings → Network, or `ipconfig` / `ifconfig`).
-4. **Monitor browser:** open `http://<LAN-IP>:8080/index.html?mode=display` (fullscreen / kiosk as needed).
+4. **Monitor / projector browser:** open `http://<LAN-IP>:8080/` or `index.html` — it defaults to **display** (`?mode=display`). For a one-machine preview with buttons + pond, use `index.html?mode=combined`.
 5. **Tablet browser:** open `http://<LAN-IP>:8080/controller.html` on the same Wi‑Fi.
 
 The tablet sends button taps over **WebSocket** to the PC; audio and video play on the display machine. Allow the port through the OS firewall if connections fail.
@@ -54,8 +54,8 @@ This stores credentials in memory for 1 hour only, then automatically clears the
 
 ## Controls
 
-- **Mouse/Touch**: Click buttons to trigger actions
-- **Keyboard**: 
+- **Mouse/Touch (combined mode only)**: Click on-screen buttons (`?mode=combined`) to trigger actions
+- **Keyboard** (display and combined):
   - `1` - Like (Happy)
   - `2` - Dislike (Sad)
   - `3` - Positive Comment (Noise)
@@ -65,7 +65,7 @@ This stores credentials in memory for 1 hour only, then automatically clears the
 
 ## Project Structure
 
-- `index.html` - Main HTML file with p5.js libraries
+- `index.html` - p5 entry; **defaults to display** (query `mode=display` added if absent). Use **`?mode=combined`** for buttons on the same screen.
 - `controller.html` - Tablet-only control surface (use with `npm start`)
 - `sketch.js` - Main p5.js sketch with all functionality
 - `server.mjs` - Local HTTP + WebSocket relay for dual-display use
