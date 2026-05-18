@@ -63,9 +63,13 @@ let quadrantPosition = {
 };
 const QUADRANT_SMOOTHING = 0.15; // How much each press moves the average (0-1)
 
-// Videos = Cartesian quadrant pairs: Happy/Sad × Noise/Silence (files: Happy_Noise.mp4, …)
+// Videos = quadrant pairs Happy/Sad × Noise/Silence; each uses three files:
+// assets/videos/Happy_Noise_1.mp4 … Happy_Noise_3.mp4 (and similarly for other quadrants).
 const QUADRANT_VIDEO_IDS = ['Happy_Noise', 'Happy_Silence', 'Sad_Noise', 'Sad_Silence'];
 const DEFAULT_QUADRANT_VIDEO_ID = 'Happy_Noise';
+const QUADRANT_VARIANT_COUNT = 3;
+const VARIANT_DWELL_MS = 11000;
+const VARIANT_INNER_FADE_MS = 950;
 
 // Low-res grain buffer (updated every few frames) — keeps sketch fast so video stays smooth
 let pondGrainBuffer = null;
@@ -105,42 +109,62 @@ function pondGrainRefreshSkip() {
 const MAX_RIPPLES = 36;
 
 // ============================================================================
-// VIDEO BACKGROUND (quadrant pair + crossfade)
+// VIDEO BACKGROUND (quadrant crossfade + 3-variant loop per quadrant)
 // ============================================================================
 
 class VideoBackgroundManager {
     constructor() {
-        this.clips = {};
+        /** group id → [p5.Video, …] length QUADRANT_VARIANT_COUNT */
+        this.variantPools = {};
         this.foregroundId = DEFAULT_QUADRANT_VIDEO_ID;
-        this.backgroundId = null; // outgoing clip during crossfade
+        this.backgroundId = null;
         this.fadeStartMs = 0;
         this.fadeDurationMs = 1400;
         this.lastStableId = DEFAULT_QUADRANT_VIDEO_ID;
         this.deadZone = 0.1;
         this.playbackStarted = false;
+
+        this.variantIdx = 0;
+        this.variantInnerB = null;
+        this.variantInnerFadeStartMs = 0;
+        this.variantStableSinceMs = 0;
+        this.quadrantFadeOutVariantIdx = 0;
+
         /** Downscaled intermediate blit — fewer pixels sampled per frame on huge canvases */
         this._videoScratch = null;
         this._scratchIw = 0;
         this._scratchIh = 0;
     }
 
+    getClip(groupId, variantIdx) {
+        const pool = this.variantPools[groupId];
+        if (!pool || variantIdx < 0 || variantIdx >= pool.length) return null;
+        return pool[variantIdx];
+    }
+
+    _easeCrossfade(t) {
+        return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+    }
+
     preloadAssets() {
-        for (const id of QUADRANT_VIDEO_IDS) {
-            const v = createVideo(`assets/videos/${id}.mp4`);
-            v.hide();
-            v.volume(0);
-            v.attribute('playsinline', '');
-            v.attribute('muted', '');
-            // Hint playback at device rate (helps some browsers stay in sync with compositor)
-            try {
-                v.elt.playbackRate = 1;
-            } catch (e) { /* ignore */ }
-            this.clips[id] = v;
-            this._primeVideoElement(v);
+        for (const gid of QUADRANT_VIDEO_IDS) {
+            this.variantPools[gid] = [];
+            for (let i = 1; i <= QUADRANT_VARIANT_COUNT; i++) {
+                const v = createVideo(`assets/videos/${gid}_${i}.mp4`);
+                v.hide();
+                v.volume(0);
+                v.attribute('playsinline', '');
+                v.attribute('muted', '');
+                try {
+                    v.elt.playbackRate = 1;
+                } catch (e) { /* ignore */ }
+                this._primeVideoElement(v);
+                this.variantPools[gid].push(v);
+            }
         }
 
         if (IS_DISPLAY_MODE) {
-            const seed = this.clips[DEFAULT_QUADRANT_VIDEO_ID];
+            const seed = this.getClip(DEFAULT_QUADRANT_VIDEO_ID, 0);
             const el = seed && seed.elt;
             if (el) {
                 const kick = () => {
@@ -148,6 +172,91 @@ class VideoBackgroundManager {
                 };
                 if (el.readyState >= 3) queueMicrotask(kick);
                 else el.addEventListener('canplay', kick, { once: true });
+            }
+        }
+    }
+
+    _playingSlots() {
+        const rows = [];
+        if (this.backgroundId !== null) {
+            rows.push([this.backgroundId, this.quadrantFadeOutVariantIdx]);
+            rows.push([this.foregroundId, this.variantIdx]);
+            return rows;
+        }
+        if (this.variantInnerB !== null) {
+            rows.push([this.foregroundId, this.variantIdx]);
+            rows.push([this.foregroundId, this.variantInnerB]);
+            return rows;
+        }
+        rows.push([this.foregroundId, this.variantIdx]);
+        return rows;
+    }
+
+    syncClipPauseStates() {
+        const playingKeys = new Set();
+        for (const [g, i] of this._playingSlots()) {
+            playingKeys.add(`${g}:${i}`);
+        }
+        for (const gid of QUADRANT_VIDEO_IDS) {
+            const pool = this.variantPools[gid];
+            if (!pool) continue;
+            for (let i = 0; i < pool.length; i++) {
+                const v = pool[i];
+                if (!v?.elt) continue;
+                const want = playingKeys.has(`${gid}:${i}`);
+                const el = v.elt;
+                if (want) {
+                    if (el.paused) {
+                        v.loop();
+                        const p = v.play();
+                        if (p !== undefined && typeof p.catch === 'function') p.catch(() => {});
+                    }
+                } else if (!el.paused) {
+                    try {
+                        v.pause();
+                    } catch (e) { /* ignore */ }
+                }
+            }
+        }
+    }
+
+    updateVariantCycle() {
+        if (!this.playbackStarted || this.backgroundId !== null) return;
+
+        if (this.variantInnerB !== null) {
+            const tt = (millis() - this.variantInnerFadeStartMs) / VARIANT_INNER_FADE_MS;
+            if (tt >= 1) {
+                const oldIdx = this.variantIdx;
+                this.variantIdx = this.variantInnerB;
+                this.variantInnerB = null;
+                const oldClip = this.getClip(this.foregroundId, oldIdx);
+                if (oldClip) {
+                    try {
+                        oldClip.pause();
+                    } catch (e) { /* ignore */ }
+                }
+                this.variantStableSinceMs = millis();
+            }
+            return;
+        }
+
+        if (millis() - this.variantStableSinceMs >= VARIANT_DWELL_MS) {
+            const next = (this.variantIdx + 1) % QUADRANT_VARIANT_COUNT;
+            this.variantInnerB = next;
+            this.variantInnerFadeStartMs = millis();
+            const vin = this.getClip(this.foregroundId, next);
+            if (vin) {
+                try {
+                    vin.time(0);
+                } catch (e) { /* ignore */ }
+                vin.loop();
+                const pin = vin.play();
+                if (pin !== undefined && typeof pin.catch === 'function') pin.catch(() => {});
+            }
+            const vout = this.getClip(this.foregroundId, this.variantIdx);
+            if (vout) {
+                const po = vout.play();
+                if (po !== undefined && typeof po.catch === 'function') po.catch(() => {});
             }
         }
     }
@@ -164,43 +273,31 @@ class VideoBackgroundManager {
         } catch (e) { /* ignore */ }
     }
 
-    /** Start looping muted clips (needs user gesture unless video is muted + kiosk / permissive autoplay). */
+    /** Start muted clips (autoplay-friendly when muted). */
     ensurePlaybackStarted() {
         if (this.playbackStarted) return;
         this.playbackStarted = true;
-        for (const id of Object.keys(this.clips)) {
-            const v = this.clips[id];
-            this._primeVideoElement(v);
-            v.loop();
-            if (id === this.foregroundId) {
-                const p = v.play();
-                if (p !== undefined && typeof p.catch === 'function') p.catch(() => {});
-            } else {
+        for (const gid of QUADRANT_VIDEO_IDS) {
+            const pool = this.variantPools[gid];
+            if (!pool) continue;
+            for (const v of pool) {
+                this._primeVideoElement(v);
+                v.loop();
                 try {
                     v.pause();
                 } catch (e) { /* ignore */ }
             }
         }
+        this.variantStableSinceMs = millis();
+        this.syncClipPauseStates();
     }
 
-    /** Display / kiosk: keep videos unpaused if the browser blocked the first play() */
     maintainKioskAutoplay() {
-        if (!IS_DISPLAY_MODE) return;
-        for (const id of [this.foregroundId, this.backgroundId]) {
-            if (id == null) continue;
-            const v = this.clips[id];
-            if (!v?.elt) continue;
-            this._primeVideoElement(v);
-            const el = v.elt;
-            if (el.readyState >= 2 && el.paused) {
-                v.loop();
-                const p = v.play();
-                if (p !== undefined && typeof p.catch === 'function') p.catch(() => {});
-            }
-        }
+        if (!this.playbackStarted) return;
+        this.syncClipPauseStates();
     }
 
-    /** Map (happySad, noiseSilence) to one of four clips: Happy_Noise, Happy_Silence, … */
+    /** Map (happySad, noiseSilence) to quadrant group id */
     pickTargetVideoId(hs, ns) {
         if (abs(hs) < this.deadZone && abs(ns) < this.deadZone) {
             return this.lastStableId;
@@ -214,32 +311,48 @@ class VideoBackgroundManager {
 
     snapCrossfadeComplete() {
         if (this.backgroundId !== null) {
-            const out = this.clips[this.backgroundId];
-            if (out) out.pause();
+            const outClip = this.getClip(this.backgroundId, this.quadrantFadeOutVariantIdx);
+            if (outClip) {
+                try {
+                    outClip.pause();
+                } catch (e) { /* ignore */ }
+            }
             this.backgroundId = null;
         }
     }
 
-    beginCrossfade(newId) {
-        if (newId === this.foregroundId) return;
-        const incoming = this.clips[newId];
-        if (!incoming) return;
+    beginCrossfade(newGroupId) {
+        if (newGroupId === this.foregroundId) return;
+        const incomingClip = this.getClip(newGroupId, this.variantIdx);
+        if (!incomingClip) return;
+
         this.backgroundId = this.foregroundId;
-        this.foregroundId = newId;
+        this.foregroundId = newGroupId;
+        this.quadrantFadeOutVariantIdx = this.variantIdx;
+
+        if (this.variantInnerB !== null) {
+            const mergedIdx = this.variantInnerB;
+            this.variantInnerB = null;
+            this.variantIdx = mergedIdx;
+        }
+
         this.fadeStartMs = millis();
         try {
-            incoming.time(0);
+            incomingClip.time(0);
         } catch (e) { /* some browsers */ }
-        incoming.loop();
-        this._primeVideoElement(incoming);
-        let pin = incoming.play();
+        incomingClip.loop();
+        this._primeVideoElement(incomingClip);
+        let pin = incomingClip.play();
         if (pin !== undefined && typeof pin.catch === 'function') pin.catch(() => {});
-        const out = this.clips[this.backgroundId];
-        if (out) {
-            this._primeVideoElement(out);
-            let pout = out.play();
-            if (pout !== undefined && typeof pout.catch === 'function') pout.catch(() => {});
+
+        const outClip = this.getClip(this.backgroundId, this.quadrantFadeOutVariantIdx);
+        if (outClip) {
+            this._primeVideoElement(outClip);
+            let pout = outClip.play();
+            if (pout !== undefined && typeof p.catch === 'function') pout.catch(() => {});
         }
+        this.variantStableSinceMs = millis();
+        this.syncClipPauseStates();
     }
 
     updateFromQuadrant(hs, ns) {
@@ -260,9 +373,14 @@ class VideoBackgroundManager {
     endCrossfadeIfDone() {
         if (this.backgroundId === null) return;
         if (this.getFadeT() < 1) return;
-        const out = this.clips[this.backgroundId];
-        if (out) out.pause();
+        const outClip = this.getClip(this.backgroundId, this.quadrantFadeOutVariantIdx);
+        if (outClip) {
+            try {
+                outClip.pause();
+            } catch (e) { /* ignore */ }
+        }
         this.backgroundId = null;
+        this.syncClipPauseStates();
     }
 
     /** Max longer edge (px) for video texture upload; scales with pond area */
@@ -331,16 +449,23 @@ class VideoBackgroundManager {
     }
 
     render() {
-        const t = this.getFadeT();
-        const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+        const tQ = this.getFadeT();
+        const eQ = this._easeCrossfade(tQ);
 
         if (this.backgroundId !== null) {
-            const outAlpha = 255 * (1 - e);
-            const inAlpha = 255 * e;
-            this.drawVideoCover(this.clips[this.backgroundId], outAlpha);
-            this.drawVideoCover(this.clips[this.foregroundId], inAlpha);
+            const outA = 255 * (1 - eQ);
+            const inA = 255 * eQ;
+            this.drawVideoCover(this.getClip(this.backgroundId, this.quadrantFadeOutVariantIdx), outA);
+            this.drawVideoCover(this.getClip(this.foregroundId, this.variantIdx), inA);
+        } else if (this.variantInnerB !== null) {
+            const ti = (millis() - this.variantInnerFadeStartMs) / VARIANT_INNER_FADE_MS;
+            const ei = this._easeCrossfade(constrain(ti, 0, 1));
+            const outA = 255 * (1 - ei);
+            const inA = 255 * ei;
+            this.drawVideoCover(this.getClip(this.foregroundId, this.variantIdx), outA);
+            this.drawVideoCover(this.getClip(this.foregroundId, this.variantInnerB), inA);
         } else {
-            this.drawVideoCover(this.clips[this.foregroundId], 255);
+            this.drawVideoCover(this.getClip(this.foregroundId, this.variantIdx), 255);
         }
 
         this.endCrossfadeIfDone();
@@ -1657,13 +1782,12 @@ function draw() {
     
     // Quadrant-driven video layer + smooth crossfade
     if (videoBackgroundManager) {
-        if (IS_DISPLAY_MODE) {
-            videoBackgroundManager.maintainKioskAutoplay();
-        }
+        videoBackgroundManager.maintainKioskAutoplay();
         videoBackgroundManager.updateFromQuadrant(
             quadrantPosition.happySad,
             quadrantPosition.noiseSilence
         );
+        videoBackgroundManager.updateVariantCycle();
         videoBackgroundManager.render();
     }
     
