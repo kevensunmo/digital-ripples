@@ -1682,14 +1682,7 @@ function updatePondGrainBuffer(turbulence) {
 }
 
 function renderBackground() {
-    // Single semi-transparent veil (avoids thousands of strip draws)
-    push();
-    noStroke();
-    fill(5, 10, 18, 118);
-    rect(0, 0, width, pondHeight);
-    fill(5, 8, 14, 72);
-    rect(0, 0, width, pondHeight * 0.45);
-    pop();
+    // Grain / vignette only (full-pond + top-band veils removed for clearer projector video)
 
     // Scaled grain image — skip near-full blackout and skip CPU refresh less often on huge canvases
     const turbulence = activityManager.getBackgroundTurbulence();
