@@ -31,6 +31,9 @@ const MIME = {
   '.woff2': 'font/woff2',
 };
 
+/** Browsers aggressively cache mp4/sketch locally; kiosk restarts kept showing stale media until hard-refresh. */
+const SEND_NO_STORE = new Set(['.html', '.js', '.mp4', '.webm', '.mov', '.m4v']);
+
 function sendFile(res, filePath) {
   const ext = path.extname(filePath).toLowerCase();
   const type = MIME[ext] || 'application/octet-stream';
@@ -40,7 +43,12 @@ function sendFile(res, filePath) {
       res.end(err.code === 'ENOENT' ? 'Not found' : 'Server error');
       return;
     }
-    res.writeHead(200, { 'Content-Type': type });
+    const headers = { 'Content-Type': type };
+    if (SEND_NO_STORE.has(ext)) {
+      headers['Cache-Control'] = 'no-store, max-age=0';
+      headers['Pragma'] = 'no-cache';
+    }
+    res.writeHead(200, headers);
     res.end(data);
   });
 }
