@@ -8,3 +8,10 @@ github-ssh/id_ed25519_digital_ripples
 
 # Node (dual-display relay server)
 node_modules/
+
+# Video binaries (large; copy locally — expected under assets/videos/)
+*.mp4
+*.webm
+*.mov
+*.m4v
+*.mkv
