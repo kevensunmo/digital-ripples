@@ -71,6 +71,8 @@ const DEFAULT_QUADRANT_VIDEO_ID = 'Happy_Noise';
 const QUADRANT_VARIANT_COUNT = 3;
 const VARIANT_DWELL_MS = 11000;
 const VARIANT_INNER_FADE_MS = 950;
+/** Bump after replacing mp4 bundles so caches pick up new decoded media (server strips ?… when reading from disk). */
+const VIDEO_ASSETS_VERSION = '20260518-multi-v2';
 
 // Low-res grain buffer (updated every few frames) — keeps sketch fast so video stays smooth
 let pondGrainBuffer = null;
@@ -108,6 +110,15 @@ function pondGrainRefreshSkip() {
 
 /** Avoid unbounded ripple overlap cost when inputs spam */
 const MAX_RIPPLES = 36;
+
+/** p5.Video.play() rejects with AbortError when pause interrupts; catch so devtools stays quiet. */
+function swallowPlayAbort(p) {
+    if (p !== undefined && typeof p.catch === 'function') {
+        p.catch((err) => {
+            if (!err || err.name !== 'AbortError') { /* ignore */ }
+        });
+    }
+}
 
 // ============================================================================
 // VIDEO BACKGROUND (quadrant crossfade + 3-variant loop per quadrant)
@@ -151,7 +162,9 @@ class VideoBackgroundManager {
         for (const gid of QUADRANT_VIDEO_IDS) {
             this.variantPools[gid] = [];
             for (let i = 1; i <= QUADRANT_VARIANT_COUNT; i++) {
-                const v = createVideo(`assets/videos/${gid}_${i}.mp4`);
+                const v = createVideo(
+                    `assets/videos/${gid}_${i}.mp4?v=${VIDEO_ASSETS_VERSION}`
+                );
                 v.hide();
                 v.volume(0);
                 v.attribute('playsinline', '');
@@ -193,32 +206,52 @@ class VideoBackgroundManager {
         return rows;
     }
 
+    /** Start wanted clips synchronously; pause everything else next microtick (avoids play() aborted by pause() same turn). */
     syncClipPauseStates() {
-        const playingKeys = new Set();
-        for (const [g, i] of this._playingSlots()) {
-            playingKeys.add(`${g}:${i}`);
-        }
+        const playingKeysNow = () => {
+            const s = new Set();
+            for (const [g, i] of this._playingSlots()) {
+                s.add(`${g}:${i}`);
+            }
+            return s;
+        };
+
+        const keys = playingKeysNow();
         for (const gid of QUADRANT_VIDEO_IDS) {
             const pool = this.variantPools[gid];
             if (!pool) continue;
             for (let i = 0; i < pool.length; i++) {
                 const v = pool[i];
                 if (!v?.elt) continue;
-                const want = playingKeys.has(`${gid}:${i}`);
+                const want = keys.has(`${gid}:${i}`);
                 const el = v.elt;
-                if (want) {
-                    if (el.paused) {
-                        v.loop();
-                        const p = v.play();
-                        if (p !== undefined && typeof p.catch === 'function') p.catch(() => {});
-                    }
-                } else if (!el.paused) {
-                    try {
-                        v.pause();
-                    } catch (e) { /* ignore */ }
+                if (!want) continue;
+                if (el.paused) {
+                    v.loop();
+                    swallowPlayAbort(v.play());
                 }
             }
         }
+
+        const run = typeof queueMicrotask === 'function' ? queueMicrotask : (fn) => setTimeout(fn, 0);
+        run(() => {
+            const keysLate = playingKeysNow();
+            for (const gid of QUADRANT_VIDEO_IDS) {
+                const pool = this.variantPools[gid];
+                if (!pool) continue;
+                for (let i = 0; i < pool.length; i++) {
+                    const v = pool[i];
+                    if (!v?.elt) continue;
+                    if (keysLate.has(`${gid}:${i}`)) continue;
+                    const el = v.elt;
+                    if (!el.paused) {
+                        try {
+                            v.pause();
+                        } catch (e) { /* ignore */ }
+                    }
+                }
+            }
+        });
     }
 
     updateVariantCycle() {
@@ -251,13 +284,11 @@ class VideoBackgroundManager {
                     vin.time(0);
                 } catch (e) { /* ignore */ }
                 vin.loop();
-                const pin = vin.play();
-                if (pin !== undefined && typeof pin.catch === 'function') pin.catch(() => {});
+                swallowPlayAbort(vin.play());
             }
             const vout = this.getClip(this.foregroundId, this.variantIdx);
             if (vout) {
-                const po = vout.play();
-                if (po !== undefined && typeof po.catch === 'function') po.catch(() => {});
+                swallowPlayAbort(vout.play());
             }
         }
     }
@@ -343,17 +374,14 @@ class VideoBackgroundManager {
         } catch (e) { /* some browsers */ }
         incomingClip.loop();
         this._primeVideoElement(incomingClip);
-        let pin = incomingClip.play();
-        if (pin !== undefined && typeof pin.catch === 'function') pin.catch(() => {});
+        swallowPlayAbort(incomingClip.play());
 
         const outClip = this.getClip(this.backgroundId, this.quadrantFadeOutVariantIdx);
         if (outClip) {
             this._primeVideoElement(outClip);
-            let pout = outClip.play();
-            if (pout !== undefined && typeof p.catch === 'function') pout.catch(() => {});
+            swallowPlayAbort(outClip.play());
         }
         this.variantStableSinceMs = millis();
-        this.syncClipPauseStates();
     }
 
     updateFromQuadrant(hs, ns) {
@@ -1781,14 +1809,14 @@ function draw() {
     // Base fill (visible before video frames load)
     background(12, 14, 20);
     
-    // Quadrant-driven video layer + smooth crossfade
+    // Quadrant-driven video layer + smooth crossfade (sync after quadrant + variant timers)
     if (videoBackgroundManager) {
-        videoBackgroundManager.maintainKioskAutoplay();
         videoBackgroundManager.updateFromQuadrant(
             quadrantPosition.happySad,
             quadrantPosition.noiseSilence
         );
         videoBackgroundManager.updateVariantCycle();
+        videoBackgroundManager.maintainKioskAutoplay();
         videoBackgroundManager.render();
     }
     
